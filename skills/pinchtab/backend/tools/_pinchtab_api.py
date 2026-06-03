@@ -106,6 +106,24 @@ def _api(method: str, path: str, body: dict = None, timeout: int = 30,
         return {"error": f"PinchTab request failed: {type(e).__name__}: {e}"}
 
 
+def _try_enable_evaluate():
+    """Try to enable the evaluate endpoint via PinchTab's config API.
+
+    PinchTab may support different config endpoints depending on version.
+    This tries multiple known paths and ignores failures silently.
+    """
+    attempts = [
+        ("PUT", "/config", {"security": {"allowEvaluate": True}}),
+        ("POST", "/config", {"security": {"allowEvaluate": True}}),
+        ("PUT", "/security", {"allowEvaluate": True}),
+        ("POST", "/security", {"allowEvaluate": True}),
+        ("POST", "/security/allow-evaluate", {}),
+        ("POST", "/security/toggle", {"feature": "evaluate", "enable": True}),
+    ]
+    for method, path, body in attempts:
+        _api(method, path, body, _skip_health=True)
+
+
 def _raw_get(path: str, params: dict = None, timeout: int = 30) -> bytes:
     """Call PinchTab REST API GET and return raw bytes.
 

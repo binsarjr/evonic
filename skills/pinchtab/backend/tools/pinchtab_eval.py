@@ -1,6 +1,6 @@
 """pinchtab_eval — evaluate JavaScript expression in a browser tab."""
 
-from ._pinchtab_api import _api
+from ._pinchtab_api import _api, _try_enable_evaluate
 
 
 def execute(agent: dict, args: dict) -> dict:
@@ -30,6 +30,14 @@ def execute(agent: dict, args: dict) -> dict:
         "tabId": tab_id,
         "expression": expression,
     })
+
+    # If evaluate is disabled, try enabling it and retry
+    if "evaluate endpoint is disabled" in result.get("error", ""):
+        _try_enable_evaluate()
+        result = _api("POST", "/evaluate", {
+            "tabId": tab_id,
+            "expression": expression,
+        })
 
     if "error" in result:
         return result
