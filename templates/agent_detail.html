@@ -511,7 +511,7 @@ html.dark #channel-detail-modal .hover\:bg-indigo-100:hover { background: #312e8
     <div id="tab-skills" class="tab-content hidden flex-1 min-h-0 overflow-y-auto">
         <div class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-600 p-6 max-w-3xl">
             <h3 class="text-base font-semibold text-gray-800 dark:text-gray-100 mb-1">Skills</h3>
-            <p class="text-xs text-gray-400 mb-4">Allow this agent to lazy-load skills via <code class="bg-gray-100 px-1 rounded">use_skill</code>. This only controls skill access — directly assigned tools are unaffected.</p>
+            <p class="text-xs text-gray-400 mb-4">Allow this agent to lazy-load skills via <code class="bg-gray-100 px-1 rounded">use_skill</code>. Eager (non-lazy) skills automatically inject all their tools. For selective tool picking, use the Tools tab.</p>
             <div id="skills-list" class="space-y-2">
                 <!-- Dynamically populated -->
             </div>
@@ -1984,12 +1984,24 @@ function renderSkillsList() {
 
 async function toggleSkill(skillId) {
     if (allowedSkillIds.includes(skillId)) {
+        // Deactivating — no dialog needed
         allowedSkillIds = allowedSkillIds.filter(id => id !== skillId);
+        renderSkillsList();
+        await saveSkillsQuiet();
     } else {
+        // Activating — check if non-lazy skill needs confirmation
+        const skill = allSkillsDefs.find(s => s.id === skillId);
+        if (skill && skill.lazy_tools !== true) {
+            if (!confirm('This skill is eagerly loaded (non-lazy). Activating it will automatically add all its tools to the agent. If you want to pick specific tools instead, use the Tools tab.')) {
+                // User cancelled — revert the checkbox visually
+                renderSkillsList();
+                return;
+            }
+        }
         allowedSkillIds.push(skillId);
+        renderSkillsList();
+        await saveSkillsQuiet();
     }
-    renderSkillsList();
-    await saveSkillsQuiet();
 }
 
 async function saveSkillsQuiet() {
