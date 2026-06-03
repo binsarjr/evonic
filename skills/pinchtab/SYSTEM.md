@@ -50,6 +50,11 @@ PinchTab manages Chrome browser instances with tabs. The typical workflow:
 | `pinchtab_click` | Click an element by CSS selector or snapshot `ref` |
 | `pinchtab_type` | Type text into an input element |
 
+### Scripting
+| Tool | Description |
+|------|-------------|
+| `pinchtab_eval` | Evaluate a JavaScript expression in page context |
+
 ### Visual Capture
 | Tool | Description |
 |------|-------------|
