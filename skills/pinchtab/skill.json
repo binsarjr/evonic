@@ -1,7 +1,7 @@
 {
   "id": "pinchtab",
   "name": "PinchTab Browser Automation",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Browser automation via PinchTab's HTTP API (localhost:9867). Provides tools for web navigation, content extraction, element interaction, screenshots, and tab management. Requires a running PinchTab sidecar process.",
   "brief": "You have access to PinchTab browser automation tools. Load this skill with `use_skill('pinchtab')` to navigate the web, extract content, click elements, take screenshots, and manage browser tabs. Requires PinchTab running at localhost:9867.",
   "author": "Evonic",

@@ -165,5 +165,26 @@
         "required": ["tab_id"]
       }
     }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "pinchtab_eval",
+      "description": "Evaluate a JavaScript expression in a browser tab. The expression runs in the page context and its return value is serialized and returned. Use this to execute custom JavaScript, inject cookies via document.cookie, inspect the DOM, or trigger page-side logic. Requires a tab_id and a valid JavaScript expression.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tab_id": {
+            "type": "string",
+            "description": "ID of the tab to evaluate the expression in."
+          },
+          "expression": {
+            "type": "string",
+            "description": "JavaScript expression to evaluate in the page context. For cookie injection, use: document.cookie = 'key=value; domain=.example.com; path=/'. The return value of the expression is included in the result."
+          }
+        },
+        "required": ["tab_id", "expression"]
+      }
+    }
   }
 ]
