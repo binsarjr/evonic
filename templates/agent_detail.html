@@ -4571,7 +4571,7 @@ document.addEventListener('keydown', function(e) {
 
 <!-- Plan File Editor Modal -->
 <div id="plan-editor-backdrop" class="hidden fixed inset-0 bg-black/50 flex items-start justify-center p-4 z-[200]" role="presentation">
-    <div id="plan-editor-modal" class="hidden bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-3xl h-[calc(100vh-2rem)] flex flex-col overflow-hidden" role="dialog" aria-modal="true" aria-label="Plan file editor" onclick="event.stopPropagation()">
+    <div id="plan-editor-modal" class="hidden bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-3xl flex flex-col overflow-hidden" style="height: calc(100vh - 2rem)" role="dialog" aria-modal="true" aria-label="Plan file editor" onclick="event.stopPropagation()">
         <!-- Header -->
         <div class="flex items-center justify-between px-5 py-3 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
             <h3 id="plan-editor-title" class="text-sm font-semibold text-gray-800 dark:text-gray-200 truncate">📋 Plan File</h3>
@@ -4580,9 +4580,9 @@ document.addEventListener('keydown', function(e) {
             </button>
         </div>
         <!-- Editor Body -->
-        <div class="flex-1 overflow-hidden p-5">
+        <div class="flex-1 min-h-0 flex flex-col p-5">
             <textarea id="plan-editor-textarea"
-                class="w-full h-full min-h-[350px] p-4 text-sm font-mono text-gray-800 dark:text-gray-200 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-600 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 focus:border-transparent transition-colors"
+                class="flex-1 w-full min-h-[350px] p-4 text-sm font-mono text-gray-800 dark:text-gray-200 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-600 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 focus:border-transparent transition-colors"
                 placeholder="Loading plan..."
                 spellcheck="false"></textarea>
         </div>
