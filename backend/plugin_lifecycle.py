@@ -863,6 +863,12 @@ class PluginManager:
             key = f'plugin_agent_setting:{plugin_id}:{agent_id}:{name}'
             if var_type == 'boolean':
                 db.set_setting(key, '1' if val else '0')
+            elif var_type == 'select':
+                options = [o.get('value') if isinstance(o, dict) else o
+                           for o in var_def.get('options', [])]
+                if str(val) not in {str(option) for option in options}:
+                    return {'error': f'Invalid value for {var_def.get("label", name)}'}
+                db.set_setting(key, str(val))
             else:
                 db.set_setting(key, str(val))
         return {'success': True}

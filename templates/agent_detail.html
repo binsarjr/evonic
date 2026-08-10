@@ -2502,6 +2502,22 @@ async function loadPluginSettings() {
                             </div>
                         </label>
                     </div>`;
+                } else if (s.type === 'select') {
+                    const options = (s.options || []).map(option => {
+                        const value = typeof option === 'object' ? option.value : option;
+                        const label = typeof option === 'object' ? (option.label || option.value) : option;
+                        return `<option value="${escapeHtml(String(value))}" ${String(value) === String(s.value) ? 'selected' : ''}>${escapeHtml(String(label))}</option>`;
+                    }).join('');
+                    container.innerHTML += `
+                    <div>
+                        <label class="block mb-1 text-gray-600 dark:text-gray-300 text-sm font-medium">${escapeHtml(s.label)} <span class="text-xs text-gray-400">(${escapeHtml(plugin.plugin_name)})</span></label>
+                        <select id="${id}"
+                                class="w-full p-2.5 border border-gray-300 rounded-md text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/10"
+                                onchange="savePluginSetting('${plugin.plugin_id}', '${s.name}', this.value)">
+                            ${options}
+                        </select>
+                        <p class="text-xs text-gray-400 mt-1">${escapeHtml(s.description || '')}</p>
+                    </div>`;
                 } else {
                     container.innerHTML += `
                     <div>
