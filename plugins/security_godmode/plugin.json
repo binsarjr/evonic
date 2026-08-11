@@ -1,0 +1,67 @@
+{
+  "id": "security_godmode",
+  "name": "Security Godmode — LLM Red-Team Lab",
+  "version": "0.1.9",
+  "description": "Opt-in prompt transformation, refusal scoring, and multi-model comparison using the Hermes Godmode flow.",
+  "author": "binsarjr",
+  "enabled": false,
+  "events": [],
+  "variables": [
+    {
+      "name": "AUTO_CONTEXT_ENABLED",
+      "label": "Allow per-agent Godmode injection",
+      "type": "boolean",
+      "default": true,
+      "description": "Master switch for direct per-agent system prompt and ephemeral prefill injection."
+    }
+  ],
+  "agent_settings": [
+    {
+      "name": "enabled",
+      "label": "Godmode injection",
+      "type": "boolean",
+      "default": false,
+      "description": "Inject a model-family Godmode profile on every turn without requiring a tool call."
+    },
+    {
+      "name": "system_prompt_mode",
+      "label": "System prompt mode",
+      "type": "select",
+      "options": [
+        {"value": "preserve", "label": "Preserve existing prompt"},
+        {"value": "append", "label": "Append Godmode prompt"},
+        {"value": "override", "label": "Override existing prompt"}
+      ],
+      "default": "preserve",
+      "description": "preserve keeps the compiled Evonic system prompt unchanged; append adds the Godmode prompt; override replaces it for the provider request without writing SYSTEM.md."
+    },
+    {
+      "name": "automatic_discovery",
+      "label": "Automatic profile discovery",
+      "type": "boolean",
+      "default": true,
+      "description": "Before the first active turn, test and cache the best profile for the exact current model. Discovery runs again after a model change."
+    },
+    {
+      "name": "rediscover_on_next_turn",
+      "label": "Rediscover on next turn",
+      "type": "boolean",
+      "default": false,
+      "description": "Run profile discovery once on the next active turn, then reset this switch automatically."
+    },
+    {
+      "name": "race_on_failure",
+      "label": "Race models after retries fail",
+      "type": "boolean",
+      "default": false,
+      "description": "After the initial response and two retries all refuse, race up to ten other enabled Evonic models. This consumes provider quota."
+    },
+    {
+      "name": "force_transform",
+      "label": "Force request transform",
+      "type": "boolean",
+      "default": false,
+      "description": "Transform each new user request with the saved encoding, or L33T when no encoding is saved, while retaining the active system prompt and prefill."
+    }
+  ]
+}
