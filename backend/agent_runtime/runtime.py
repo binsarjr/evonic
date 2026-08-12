@@ -2565,6 +2565,13 @@ class AgentRuntime:
             # Only need focus/focus_reason for busy rejection
             merged = agent_data
 
+        # ``always_execute`` is current agent configuration, not durable
+        # session state. A pre-existing session can retain ``false`` after the
+        # setting is enabled, so the configuration must take precedence.
+        agent = db.get_agent(agent_id)
+        if agent and agent.get('always_execute'):
+            merged['always_execute'] = True
+
         if merged:
             return AgentState.deserialize(_json.dumps(merged))
         return None

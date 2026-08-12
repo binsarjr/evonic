@@ -167,6 +167,36 @@ def test_always_execute_hides_plan_workflow_builtins_everywhere():
     assert all(executor(tool_name, {}) is None for tool_name in hidden)
 
 
+def test_restore_always_execute_overrides_stale_session_state(monkeypatch):
+    from backend.agent_runtime.runtime import AgentRuntime
+    from backend.agent_runtime import runtime as runtime_module
+
+    stale_session = json.dumps({
+        'mode': 'plan', 'tasks': [], 'next_task_id': 1, 'plan_file': None,
+        'states': {}, 'always_execute': False,
+    })
+
+    class FakeDB:
+        @staticmethod
+        def get_agent_state(agent_id=None):
+            return json.dumps({'focus': False, 'focus_reason': None})
+
+        @staticmethod
+        def get_session_state(session_id, agent_id=None):
+            return stale_session
+
+        @staticmethod
+        def get_agent(agent_id):
+            return {'id': agent_id, 'always_execute': True}
+
+    monkeypatch.setattr(runtime_module, 'db', FakeDB())
+    state = AgentRuntime.__new__(AgentRuntime)._restore_agent_state('a1', 's1')
+
+    assert state.always_execute is True
+    assert state.mode == 'execute'
+    assert state.is_blocked('write_file') is None
+
+
 def test_muktamar_registrasi_hides_disabled_atg_and_cmp_builtins():
     from backend.tools.registry import ToolRegistry
 
