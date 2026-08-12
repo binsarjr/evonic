@@ -436,7 +436,21 @@ class SkillsManager:
             return []
         with open(manifest_path, encoding='utf-8') as f:
             manifest = json.load(f)
-        return manifest.get('variables', [])
+        variables = manifest.get('variables', [])
+        for variable in variables:
+            if variable.get('options_source') != 'enabled_vision_models':
+                continue
+            from models.db import db
+            models = [model for model in db.get_enabled_llm_models()
+                      if model.get('vision_supported')]
+            variable['options'] = [{
+                'value': '', 'label': 'Automatic, use available vision model'
+            }] + [{
+                'value': model['id'],
+                'label': model.get('name') or model['id'],
+                'group': model.get('provider') or 'Unknown provider'
+            } for model in models]
+        return variables
 
     def get_skill_config(self, skill_id: str) -> Dict[str, Any]:
         """Load config from DB merged with defaults from variables schema."""

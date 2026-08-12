@@ -1,0 +1,135 @@
+[
+  {
+    "type": "function",
+    "name": "NIK Parse",
+    "description": "Parse an Indonesian NIK locally. Returned NIK is masked.",
+    "function": {
+      "name": "nik_parse",
+      "description": "Validate the NIK format, birth encoding and local region snapshot.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "nik": {
+            "type": "string",
+            "description": "NIK value, never included in logs."
+          }
+        },
+        "required": [
+          "nik"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "name": "NIK Validate",
+    "description": "Perform concise local NIK structural validation.",
+    "function": {
+      "name": "nik_validate",
+      "description": "Returns structural validation status, not official Dukcapil verification.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "nik": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "nik"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "name": "NIK Detect Crop",
+    "description": "Detect a candidate NIK crop from an image through the multipart HTTP API.",
+    "function": {
+      "name": "nik_detect_crop",
+      "description": "Use POST /api/nik/detect-crop with an image multipart file.",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    }
+  },
+  {
+    "type": "function",
+    "name": "NIK Extract From Image",
+    "description": "Extract visible document fields using an enabled Evonic vision model. No local OCR or image-processing dependency is used.",
+    "function": {
+      "name": "nik_extract_from_image",
+      "description": "Read an authorized image and automatically use an enabled vision-capable Evonic model, or use the optional explicit vision_model_id.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Path to an authorized image attachment or artifact."
+          },
+          "vision_model_id": {
+            "type": "string",
+            "description": "Optional enabled, vision-capable Evonic model ID. Omit for automatic selection."
+          }
+        },
+        "required": [
+          "path"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "name": "NIK Image Crop",
+    "description": "Crop a geometric NIK, portrait, signature, or custom region from an authorized image.",
+    "function": {
+      "name": "nik_image_crop",
+      "description": "Use the authorized image crop pipeline. Custom crops require coordinates and coordinate_space.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "crop_type": {
+            "type": "string",
+            "enum": [
+              "nik",
+              "portrait",
+              "signature",
+              "custom"
+            ]
+          },
+          "coordinates": {
+            "type": "object"
+          },
+          "coordinate_space": {
+            "type": "string",
+            "enum": [
+              "pixel",
+              "normalized"
+            ]
+          },
+          "output_format": {
+            "type": "string",
+            "enum": [
+              "metadata",
+              "data_uri"
+            ]
+          },
+          "output_mime_type": {
+            "type": "string",
+            "enum": [
+              "image/jpeg",
+              "image/png"
+            ]
+          }
+        },
+        "required": [
+          "path"
+        ]
+      }
+    }
+  }
+]

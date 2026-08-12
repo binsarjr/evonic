@@ -1,0 +1,6 @@
+{
+  "metadata": {"version": "2026.08.minimal", "scope": "minimal bootstrap snapshot", "source": "Manual bootstrap data, not a Dukcapil verification service", "updated_at": "2026-08-11"},
+  "regions": {
+    "320101": {"code": "320101", "province_code": "32", "province": "Jawa Barat", "regency_code": "3201", "regency": "Kabupaten Bogor", "district_code": "320101", "district": "Nanggung"}
+  }
+}

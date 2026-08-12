@@ -1,0 +1,158 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "nik_parse",
+      "description": "Parse an Indonesian NIK locally. The returned NIK is masked.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "nik": {
+            "type": "string",
+            "description": "NIK value. Never include it in messages, logs, or artifacts unless explicitly necessary."
+          }
+        },
+        "required": [
+          "nik"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "nik_validate",
+      "description": "Perform concise local structural NIK validation. This is not official Dukcapil verification.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "nik": {
+            "type": "string",
+            "description": "NIK value. Never include it in messages, logs, or artifacts unless explicitly necessary."
+          }
+        },
+        "required": [
+          "nik"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "nik_detect_crop",
+      "description": "Detect a candidate NIK crop in an authorized image file. No image or crop is stored.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Path to an image in this agent's attachments or artifacts directory."
+          }
+        },
+        "required": [
+          "path"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "nik_image_crop",
+      "description": "Crop a geometric NIK, portrait, signature, or custom region from an authorized image. No image or crop is stored.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Path to an authorized image attachment or artifact."
+          },
+          "crop_type": {
+            "type": "string",
+            "enum": [
+              "nik",
+              "portrait",
+              "signature",
+              "custom"
+            ]
+          },
+          "coordinates": {
+            "type": "object",
+            "properties": {
+              "x": {
+                "type": "number"
+              },
+              "y": {
+                "type": "number"
+              },
+              "width": {
+                "type": "number"
+              },
+              "height": {
+                "type": "number"
+              }
+            },
+            "additionalProperties": false
+          },
+          "coordinate_space": {
+            "type": "string",
+            "enum": [
+              "pixel",
+              "normalized"
+            ]
+          },
+          "output_format": {
+            "type": "string",
+            "enum": [
+              "metadata",
+              "data_uri"
+            ]
+          },
+          "output_mime_type": {
+            "type": "string",
+            "enum": [
+              "image/jpeg",
+              "image/png"
+            ]
+          }
+        },
+        "required": [
+          "path"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "nik_extract_from_image",
+      "description": "Extract a NIK from an authorized image after crop detection, using disabled, offline OCR, or an explicitly selected Evonic vision model.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Path to an image in this agent's attachments or artifacts directory."
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "offline",
+              "vision_model"
+            ],
+            "description": "Extraction provider. Defaults to disabled."
+          },
+          "vision_model_id": {
+            "type": "string",
+            "description": "Enabled vision-capable Evonic model ID, required only for vision_model."
+          }
+        },
+        "required": [
+          "path"
+        ]
+      }
+    }
+  }
+]

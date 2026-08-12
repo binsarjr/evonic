@@ -1,0 +1,69 @@
+{
+  "id": "nik_parser",
+  "name": "NIK Parser",
+  "version": "1.2.0",
+  "description": "Privacy-aware structural NIK parsing, vision-model image extraction, and optional local document, portrait, signature, and custom-coordinate crops.",
+  "brief": "Use this skill for privacy-aware structural NIK parsing and validation. It does not prove Dukcapil registration, ownership, active status, or identity.",
+  "author": "Evonic",
+  "tools_file": "tools.json",
+  "lazy_tools": false,
+  "default_enabled": true,
+  "variables": [
+    {
+      "name": "ENABLE_IMAGE_PROCESSING",
+      "label": "Enable Image Processing",
+      "type": "boolean",
+      "default": false,
+      "description": "Allow optional local OpenCV document and crop tools. Vision extraction does not require this setting.",
+      "group": "image",
+      "groupLabel": "Image Processing"
+    },
+    {
+      "name": "DEFAULT_VISION_MODEL_ID",
+      "label": "Default Vision Model",
+      "type": "select",
+      "default": "",
+      "options_source": "enabled_vision_models",
+      "description": "Optional first enabled Evonic vision model to try. Empty selects automatically from the enabled vision-model list.",
+      "group": "extraction",
+      "groupLabel": "Extraction Settings"
+    },
+    {
+      "name": "FALLBACK_VISION_MODEL_ID",
+      "label": "Fallback Vision Model",
+      "type": "select",
+      "default": "",
+      "options_source": "enabled_vision_models",
+      "description": "Second model tried after the default model fails. It must remain enabled and vision-capable.",
+      "group": "extraction",
+      "groupLabel": "Extraction Settings"
+    },
+    {
+      "name": "MAX_IMAGE_BYTES",
+      "label": "Maximum Image Size in Bytes",
+      "type": "number",
+      "default": 8388608,
+      "description": "Upload byte limit shared by vision extraction and local crop tools. A hard internal safety ceiling remains in force.",
+      "group": "image",
+      "groupLabel": "Image Processing"
+    },
+    {
+      "name": "MAX_IMAGE_PIXELS",
+      "label": "Maximum Image Pixels",
+      "type": "number",
+      "default": 20000000,
+      "description": "Requested decoded-image limit. A hard internal safety ceiling always remains in force.",
+      "group": "image",
+      "groupLabel": "Image Processing"
+    },
+    {
+      "name": "MIN_NIK_CROP_CONFIDENCE",
+      "label": "Minimum NIK Crop Confidence",
+      "type": "number",
+      "default": 0.55,
+      "description": "Confidence below this value should be manually reviewed.",
+      "group": "image",
+      "groupLabel": "Image Processing"
+    }
+  ]
+}

@@ -1,0 +1,46 @@
+{
+  "id": "nik_parser",
+  "name": "NIK Parser",
+  "version": "1.2.0",
+  "description": "Provides the HTTP API for the NIK Parser skill.",
+  "author": "Evonic",
+  "enabled": true,
+  "events": [],
+  "routes": [
+    {
+      "path": "/api/nik/parse",
+      "methods": [
+        "POST"
+      ],
+      "handler": "parse_api"
+    },
+    {
+      "path": "/api/nik/validate",
+      "methods": [
+        "POST"
+      ],
+      "handler": "validate_api"
+    },
+    {
+      "path": "/api/nik/detect-crop",
+      "methods": [
+        "POST"
+      ],
+      "handler": "crop_api"
+    },
+    {
+      "path": "/api/nik/image-crop",
+      "methods": [
+        "POST"
+      ],
+      "handler": "image_crop_api"
+    },
+    {
+      "path": "/api/nik/extract-image",
+      "methods": [
+        "POST"
+      ],
+      "handler": "extract_api"
+    }
+  ]
+}
