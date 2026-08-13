@@ -44,7 +44,6 @@ class TestSlashedIdRoutes:
             api_format="anthropic",
             vision_supported=1,
             document_pdf_supported=1,
-            document_text_supported=1,
             document_office_supported=1,
             document_spreadsheet_supported=1,
         )
@@ -52,7 +51,7 @@ class TestSlashedIdRoutes:
         assert model["api_format"] == "anthropic"
         assert model["vision_supported"] == 1
         assert model["document_pdf_supported"] == 1
-        assert model["document_text_supported"] == 1
+        assert "document_text_supported" not in model
         assert model["document_office_supported"] == 1
         assert model["document_spreadsheet_supported"] == 1
 
@@ -60,7 +59,7 @@ class TestSlashedIdRoutes:
         clone = db.get_model_by_id(clone_id)
         assert clone["vision_supported"] == 1
         assert clone["document_pdf_supported"] == 1
-        assert clone["document_text_supported"] == 1
+        assert "document_text_supported" not in clone
         assert clone["document_office_supported"] == 1
         assert clone["document_spreadsheet_supported"] == 1
 

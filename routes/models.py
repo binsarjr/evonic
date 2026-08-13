@@ -93,7 +93,6 @@ def api_create_model():
                 "api_format": data.get("api_format", "openai"),
                 "vision_supported": data.get("vision_supported", 0),
                 "document_pdf_supported": data.get("document_pdf_supported", 0),
-                "document_text_supported": data.get("document_text_supported", 0),
                 "document_office_supported": data.get("document_office_supported", 0),
                 "document_spreadsheet_supported": data.get("document_spreadsheet_supported", 0),
                 "context_window": data.get("context_window", 0),
@@ -194,7 +193,6 @@ def api_clone_model(model_id):
         "api_format": source.get("api_format", "openai"),
         "vision_supported": source.get("vision_supported", 0),
         "document_pdf_supported": source.get("document_pdf_supported", 0),
-        "document_text_supported": source.get("document_text_supported", 0),
         "document_office_supported": source.get("document_office_supported", 0),
         "document_spreadsheet_supported": source.get("document_spreadsheet_supported", 0),
     }
