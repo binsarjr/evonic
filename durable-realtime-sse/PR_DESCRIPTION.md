@@ -2,7 +2,7 @@
 
 ## Summary
 
-This change gives browser-facing realtime state a durable, ordered source of truth. Chat history still stores the conversation itself, while queued/running turns and mid-turn telemetry live in a separate SQLite journal and reach every open tab through one SSE gateway.
+This change gives browser-facing realtime state a durable, ordered source of truth. Chat history still stores the conversation itself, while queued/running turns and mid-turn telemetry live in the dedicated `shared/db/realtime.db` journal and reach every open tab through one SSE gateway.
 
 The goal is not simply to add SSE. The current flow already has SSE and a unified endpoint. The problem is that history, live telemetry, busy state, reconnect recovery, and cross-tab rendering still depend on different sources with different lifetimes.
 
@@ -15,7 +15,7 @@ With this change, a page can load stable history, continue from the exact event 
 The current design splits chat state across three paths:
 
 - chat history persists user and assistant messages;
-- `EventStream` keeps a bounded per-session telemetry buffer in process memory;
+- `EventStream` keeps at most 500 telemetry entries per session in process memory and schedules that buffer for deletion 30 seconds after a turn;
 - a separate in-memory tracker answers whether an agent is busy.
 
 The browser combines those paths using history requests, content polling, `/chat/events`, `/busy`, and SSE. The unified SSE route reduces the number of browser connections, but its chat replay still comes from the process-local buffer. It unifies transport, not the underlying source of truth.
@@ -25,7 +25,7 @@ The browser combines those paths using history requests, content polling, `/chat
 - Live events travel directly from the runtime to connected listeners with very little overhead.
 - Transient telemetry does not create a database write for every thinking or tool event.
 - The bounded ring buffer keeps memory use predictable.
-- A short reconnect in the same process can usually recover from the session buffer.
+- A reconnect within the short post-turn buffer window can usually recover if it reaches the same process.
 - Chat history stays small because it only contains conversation records.
 
 For one tab that remains connected through a normal, short turn, this is a reasonable and fast design.
@@ -52,14 +52,17 @@ That assumption is correct for Tab A and wrong for Tab B. Tab B can receive the 
 
 ![Durable realtime architecture](https://raw.githubusercontent.com/binsarjr/evonic/durable-realtime-sse-assets/durable-realtime-sse/architecture-overview.png)
 
-Browser-facing events are now normalized and appended to SQLite before asynchronous plugin listeners run. Each row receives one global event ID and timestamp.
+Browser-facing events are now normalized and appended to `shared/db/realtime.db` before asynchronous plugin listeners run. Each row receives one global event ID and timestamp. Keeping this journal global, rather than creating one database per agent, gives the gateway one ordering domain for cross-agent status, approvals, agent-to-agent activity, and chat events while isolating the write load from the main application database.
 
 The responsibilities are explicit:
 
 - chat history stores stable user and assistant messages;
 - `realtime_events` stores ordered browser-facing telemetry;
 - `active_turns` projects queued and running work;
+- per-session replay floors record the newest cursor that cleanup has made unavailable;
 - `/api/realtime/stream` performs initial replay, reconnect replay, snapshots, and live delivery.
+
+Payloads are sanitized before they enter the journal and capped at 256 KiB. Oversized fields keep a bounded preview and explicit truncation metadata instead of allowing one tool result to grow the database without limit.
 
 This keeps history and telemetry separate without making live state disposable.
 
@@ -73,6 +76,8 @@ This keeps history and telemetry separate without making live state disposable.
 | Long silent turn | Five-minute UI timeout and ten-minute busy TTL can hide ongoing work | A turn remains active until it reaches a real terminal state |
 | Cross-tab messages | Sender renders optimistically; another tab can filter the user message as an echo | Every tab renders the durable event; the sender reconciles its optimistic bubble |
 | Reconnect | Per-session sequence and replay buffer exist only in the current process | `Last-Event-ID` resumes from the durable global sequence |
+| Post-turn replay | Session buffer is scheduled for deletion after 30 seconds | Completed telemetry remains replayable for one hour |
+| Cursor older than retained telemetry | No durable way to distinguish an empty replay from missing data | Gateway requests a history resync, then the browser reconnects from a fresh cursor |
 | Server restart | Live buffers vanish without a reliable terminal event | Old active turns are closed as interrupted after startup |
 | Ordering | History, chat SSE, status SSE, and polling use different cursors | Browser-visible events share one global ID and timestamp |
 | Operational cost | Fewer database writes, but recovery logic is spread across endpoints and frontend paths | More SQLite writes and lifecycle logic, but one deterministic browser contract |
@@ -92,15 +97,17 @@ The same stream carries `turn_queued`, `turn_begin`, Thinking updates, tool prog
 
 A fresh page renders history and captures `X-Evonic-Realtime-Cursor` from that response. It opens SSE from the cursor, replays any active-turn telemetry represented by the journal, closes the history-to-stream gap, receives a current-state snapshot, and continues with live events.
 
-A transient disconnect uses native `EventSource` reconnection and `Last-Event-ID`. The gateway returns only the missing journal rows and does not need a second content-polling recovery path.
+A transient disconnect within the retained window uses native `EventSource` reconnection and `Last-Event-ID`. The gateway returns only the missing journal rows and does not need a second content-polling recovery path.
+
+If a tab reconnects with a cursor older than the available journal, or with an invalid or future cursor, the gateway emits `history_resync_required` and closes that stream. The agent-detail and sessions views reload stable chat history, take its new cursor, and reconnect automatically. An expired cursor therefore becomes an explicit recovery path instead of looking like an empty replay.
 
 ## Turn lifecycle and retention
 
 ![Durable turn lifecycle](https://raw.githubusercontent.com/binsarjr/evonic/durable-realtime-sse-assets/durable-realtime-sse/turn-lifecycle.png)
 
-Events belonging to an active turn do not expire. Once a turn reaches a terminal state, its journal remains replayable for 24 hours and is then eligible for cleanup. Session clear removes completed realtime history without deleting an active turn that is still needed to finish safely.
+Events belonging to an active turn do not expire. Once a turn reaches a terminal state, its journal remains replayable for one hour and is then eligible for cleanup. Events that do not belong to a turn use the same one-hour window from their occurrence. Session clear removes completed realtime history without deleting an active turn that is still needed to finish safely.
 
-On startup, abandoned active-turn records are emitted as interrupted and closed. This restores an honest UI state; it does not claim to resume an LLM call or tool process that died with the server.
+On startup, abandoned active-turn records are emitted as interrupted and closed. If a terminal `done` event was already journaled before the process died, recovery closes the stale projection without writing a duplicate terminal event. This restores an honest UI state; it does not claim to resume an LLM call or tool process that died with the server.
 
 ## Trade-offs and limits
 
@@ -109,16 +116,18 @@ The durable design intentionally accepts several costs:
 - thinking, tool, status, and message events create additional SQLite writes;
 - replay, snapshot ordering, cursor validation, retention, and deduplication add backend logic;
 - retained telemetry has a data-lifecycle responsibility that an in-memory buffer did not have;
+- one global realtime database creates a shared write path, although it also provides the ordering the gateway needs;
 - SQLite WAL is not a distributed event broker and may become a bottleneck under substantially higher write concurrency;
 - clients still need idempotent rendering because history, an HTTP response, and replay can legitimately overlap.
 
-The implementation keeps that cost bounded: it reuses Evonic's existing SQLite deployment instead of adding a broker, stores sanitized browser payloads, retains completed telemetry for 24 hours, preserves active events until termination, validates cursors, and deduplicates with event and message IDs.
+The implementation keeps that cost bounded: it uses a dedicated SQLite WAL database instead of adding a broker, caps each stored payload at 256 KiB, retains completed telemetry for one hour, preserves active events until termination, tracks replay floors per session, validates cursors, and deduplicates with event and message IDs.
 
 ## Compatibility and interface changes
 
 - `GET /api/realtime/stream` multiplexes `chat`, `status`, `approvals`, `workplace`, and `update` events.
 - `cursor_version=2` identifies durable global cursors; `snapshot=1` requests initial state.
 - Native reconnects use `Last-Event-ID` and suppress duplicate initial snapshots.
+- Chat streams emit `history_resync_required` when a versioned cursor is expired, invalid, or ahead of the journal; both chat views recover automatically.
 - Chat history exposes `X-Evonic-Realtime-Cursor` for the history-to-stream handoff.
 - Message sends accept `client_message_id`; durable events expose stable `message_id` values.
 - Busy state comes from durable queued/running turns rather than a separate expiring agent tracker.
@@ -131,6 +140,7 @@ The implementation keeps that cost bounded: it reuses Evonic's existing SQLite d
 - New user messages appear in every tab viewing the same session.
 - Long silent work is not hidden by an arbitrary browser timeout.
 - Browser events remain globally ordered across history handoff and reconnect.
+- Expired cursors reload stable history instead of silently skipping unavailable telemetry.
 - Restarted servers report abandoned turns as interrupted instead of leaving a false busy state.
 - Chat delivery no longer depends on content polling or process-local replay buffers.
 
@@ -142,7 +152,7 @@ The implementation keeps that cost bounded: it reuses Evonic's existing SQLite d
   unit_tests/test_frontend_sse_lifecycle.py \
   unit_tests/test_state_changed_sse.py
 
-30 passed
+37 passed
 ```
 
-The focused suite covers durable ordering and scoping, active-turn replay, history-cursor handoff, invalid and future cursors, `Last-Event-ID`, cross-tab delivery, optimistic deduplication, long-turn UI behavior, atomic queued-turn cancellation, restart recovery, session cleanup, approval snapshots, cache busting, and legacy route compatibility.
+The focused suite covers durable ordering and scoping, the dedicated database path, one-hour terminal retention, active-turn replay, monotonic cursors after cleanup, history resync, payload bounds, history-cursor handoff, invalid and future cursors, `Last-Event-ID`, cross-tab delivery, optimistic deduplication, long-turn UI behavior, atomic queued-turn cancellation, restart recovery without duplicate terminal events, session cleanup, approval snapshots, cache busting, and legacy route compatibility.
