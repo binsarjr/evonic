@@ -1182,6 +1182,7 @@ def build_attachment_note(attachment_info: dict,
         mime_type,
         file_path,
         enabled=document_enabled,
+        attachment_id=attachment_id,
     )
     if guidance:
         note += f"\n{guidance}"

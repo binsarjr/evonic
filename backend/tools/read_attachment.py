@@ -2,8 +2,8 @@
 
 Reads user-uploaded file attachments stored under data/attachments/<agent_id>/.
 Enforces per-agent isolation, reuses the existing read_file pagination core for
-text content, and returns metadata for binary documents. Documents can be sent
-to the separate analyze_document tool using native provider file input.
+text content, and returns metadata for binary documents. Supported non-text
+documents can be sent to analyze_document using native provider file input.
 """
 
 import json
@@ -12,7 +12,6 @@ from typing import Any, Dict, Optional
 
 from backend.tools._document import (
     PDF,
-    TEXT_EXTENSIONS,
     analysis_guidance,
     document_category,
     is_text_document,
@@ -21,7 +20,6 @@ from backend.tools.read_file import read_file as _read_text_file
 
 
 _ATTACHMENTS_ROOT = os.path.join('data', 'attachments')
-_TEXTISH_EXTS = set(TEXT_EXTENSIONS) | {'.csv', '.tsv', '.iif'}
 
 
 def _is_textish(mime_type: Optional[str], path: str) -> bool:
@@ -143,11 +141,15 @@ def execute(agent, args: dict) -> dict:
     original_name = (row or {}).get('original_filename') or resolved_path
     category = document_category(original_name, mime_type)
 
-    # Binary documents are consumed on the host by analyze_document, so no
+    # Supported non-text documents are consumed by analyze_document, so no
     # workplace sync is needed just to return metadata and native guidance.
     if category and not _is_textish(mime_type, original_name):
         guidance = analysis_guidance(
-            original_name, mime_type, resolved_path, enabled=True
+            original_name,
+            mime_type,
+            resolved_path,
+            enabled=bool(agent.get('document_enabled', 1)),
+            attachment_id=attachment_id,
         )
         return {
             "result": (
