@@ -49,7 +49,7 @@ import json
 import re
 from config import AGENT_MAX_TOOL_RESULT_CHARS as MAX_TOOL_RESULT_CHARS
 from config import STALE_SESSION_INJECTION_ENABLED, STALE_SESSION_THRESHOLD_SECONDS
-from config import LONG_GAP_WEEKS
+from config import LONG_GAP_WEEKS, BACKGROUND_JOBS_INJECTION_ENABLED
 
 _BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _LOGS_DIR = os.path.join(_BASE_DIR, 'logs')
@@ -73,31 +73,14 @@ def _append_attachment_context(content: str, attachment_infos, attachment_info,
     attachment_infos = [info for info in attachment_infos if isinstance(info, dict)]
     if not attachment_infos and isinstance(attachment_info, dict):
         attachment_infos = [attachment_info]
-
-    notes = []
-    for index, info in enumerate(attachment_infos, 1):
-        fp = info.get('file_path', '')
-        if fp and not os.path.isabs(fp):
-            fp = os.path.abspath(os.path.join(_BASE_DIR, fp))
-        fn = info.get('filename', '')
-        mt = info.get('mime_type', '')
-        sb = int(info.get('size_bytes', 0) or 0)
-        is_img = bool(mt and mt.startswith('image/'))
-        is_audio = bool(mt and mt.startswith('audio/'))
-        if sb >= 1048576:
-            sz = f"{sb / 1048576:.1f} MB"
-        elif sb >= 1024:
-            sz = f"{sb / 1024:.1f} KB"
-        else:
-            sz = f"{sb} B"
-        label = f"Attachment #{index}" if len(attachment_infos) > 1 else "Attachment"
-        note = f"\n\n[{label}: {fn} ({mt}, {sz})]\nFile path: {fp}"
-        if is_img and has_describe_image:
-            note += "\nUse the `describe_image` tool to view and analyze this image."
-        if is_audio and agent.get('audio_enabled'):
-            note += "\nUse the `transcribe_audio` tool to listen to this audio."
-        notes.append(note)
-    return content.rstrip() + ''.join(notes) if notes else content
+    if not attachment_infos:
+        return content
+    return content.rstrip() + _ctx.build_attachment_notes(
+        attachment_infos,
+        has_describe_image=has_describe_image,
+        audio_enabled=bool(agent.get('audio_enabled')),
+        document_enabled=bool(agent.get('document_enabled', 1)),
+    )
 
 
 # --- Configuration constants ---
@@ -1027,6 +1010,14 @@ class AgentRuntime:
         from backend.tools.lib.process_tracker import process_tracker
         process_tracker.kill(session_id)
 
+    def is_stop_requested(self, session_id: str) -> bool:
+        """True if /stop was signalled for this session and not yet consumed.
+
+        Public read-only view of the stop flag, for blocking tools (e.g. the
+        sync Explore wait) that must abort promptly instead of holding the
+        agent loop until their own timeout expires."""
+        return self._get_stop_event(session_id).is_set()
+
     def summarize_session(self, agent: dict, session_id: str) -> bool:
         """Trigger summarization for a session. Public API for slash commands.
 
@@ -1799,6 +1790,7 @@ class AgentRuntime:
                     _att,
                     has_describe_image=_has_describe_image,
                     audio_enabled=bool(agent.get('audio_enabled')),
+                    document_enabled=bool(agent.get('document_enabled', 1)),
                 )
             video = msg.pop('_video_url', None) if agent.get('video_enabled') else msg.pop('_video_url', None) and None
             if not video:
@@ -2056,6 +2048,10 @@ class AgentRuntime:
             if agent.get('vision_enabled', 1) and 'describe_image' not in assigned_tool_ids:
                 assigned_tool_ids.append('describe_image')
 
+            # Agents with document analysis enabled automatically get analyze_document.
+            if agent.get('document_enabled', 1) and 'analyze_document' not in assigned_tool_ids:
+                assigned_tool_ids.append('analyze_document')
+
             # Agents with audio_enabled automatically get transcribe_audio.
             if agent.get('audio_enabled') and 'transcribe_audio' not in assigned_tool_ids:
                 assigned_tool_ids.append('transcribe_audio')
@@ -2083,6 +2079,12 @@ class AgentRuntime:
             else:
                 _workspace = agent.get('workspace') or None
 
+            # A LID-addressed WhatsApp DM reaches us as bare LID digits, which
+            # look exactly like a phone number. Resolve the real identity once
+            # here so tools never have to guess from user_id.
+            from backend.channels.whatsapp_identity import resolve_identity
+            _identity = resolve_identity(ctx.channel_id, ctx.external_user_id)
+
             agent_context = {
                 'id': agent_id,
                 '_db_agent_id': agent.get('_db_agent_id', agent_id),
@@ -2090,6 +2092,9 @@ class AgentRuntime:
                 'agent_name': agent.get('name', ''),
                 'agent_model': None,
                 'user_id': ctx.external_user_id,
+                'user_phone': _identity['user_phone'],
+                'user_jid': _identity['user_jid'],
+                'user_id_namespace': _identity['user_id_namespace'],
                 'channel_id': ctx.channel_id,
                 'session_id': ctx.session_id,
                 'assigned_tool_ids': assigned_tool_ids,
@@ -2111,6 +2116,7 @@ class AgentRuntime:
                 'run_as_user': agent.get('run_as_user'),
                 'vision_model_id': agent.get('vision_model_id'),
                 'vision_enabled': agent.get('vision_enabled', 1),
+                'document_enabled': agent.get('document_enabled', 1),
                 'audio_enabled': agent.get('audio_enabled', 0),
                 'messaging_acl': agent.get('messaging_acl'),
                 'messaging_acl_mode': agent.get('messaging_acl_mode', 'whitelist'),
@@ -2341,6 +2347,24 @@ class AgentRuntime:
             )
             if not _already_subagent_directive:
                 messages.insert(1, {"role": "system", "content": SUBAGENT_EXECUTE_DIRECTIVE})
+
+        # --- Background jobs injection ---
+        # The agent sees a background process once, in the bash result that
+        # spawned it; nothing surfaces it again. Re-state what is still running
+        # so it does not leave processes to go stale. Appended at the END: the
+        # list changes every turn, and inserting it up front would invalidate the
+        # prompt prefix cache for the whole history. Must run after
+        # _apply_wrapper_prefix, which identifies the current user message by
+        # position (last in the list).
+        if BACKGROUND_JOBS_INJECTION_ENABLED:
+            try:
+                from backend.agent_runtime.background_jobs import build_context_block
+                _bg_ctx = build_context_block(
+                    ctx.session_id, agent.get('agent_id') or agent.get('id') or '')
+                if _bg_ctx:
+                    messages.append({"role": "system", "content": _bg_ctx})
+            except Exception:
+                _logger.exception("[bgjob] context injection failed — continuing")
 
         # Call LLM with tool loop
         _inner_turn_start = time.time()

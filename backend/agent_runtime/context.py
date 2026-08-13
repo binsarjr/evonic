@@ -31,6 +31,7 @@ def _token_count(text: str) -> int:
 from models.db import db
 from models.boolean import message_wrapper_enabled
 from backend.tools import tool_registry
+from backend.tools._document import analysis_guidance
 from backend.tools.registry import BUILTIN_TOOL_IDS
 from backend.skills_manager import SkillsManager, skills_manager
 from backend.agent_runtime.evomem_client import (
@@ -774,8 +775,8 @@ def build_system_prompt(agent: Dict[str, Any], injected_system_vars: Dict[str, s
         ("/help", "Show available commands"),
         ("/summary", "Force regenerate session summary"),
         ("/stop", "Stop the agent's current processing loop"),
-        ("/detach", "Move the running long-running process (build/download) to the background so we can keep chatting — tracking is persistent (survives restarts) and you'll be notified to report the result when it finishes; the watcher is removed automatically, no cleanup needed"),
-        ("/jobs", "List background jobs for this session"),
+        ("/detach", "Stop waiting on the running long-running process and attach an on-exit monitor to it, so we can keep chatting and you report back once it finishes (persistent, survives restarts; the monitor removes itself)"),
+        ("/jobs", "List background jobs for this session and any monitors attached to them"),
         ("/dump", "Dump current session as JSONL file for download"),
         ("/model", "Show or switch LLM model"),
         ("/fast", "Show or set Codex Fast mode for this session"),
@@ -838,7 +839,9 @@ def build_system_prompt(agent: Dict[str, Any], injected_system_vars: Dict[str, s
                 "files appear in the Artifacts tab. "
                 f"Public URL: `/api/agents/{aid}/artifacts/<filename>`. "
                 f"Embed images with `<img src=\"/api/agents/{aid}/artifacts/filename.webp\" alt=\"...\">`. "
-                "On external chat channels, deliver images and files with `send_file`. "
+                "Deliver files to the user with `send_file` (or `save_artifact` for the Artifacts tab). "
+                "Never give local filesystem paths (e.g. `/home/...`, `sandbox:...`) as chat links — "
+                "the user cannot open them. "
                 f"`bash`/`runpy` must use `{artifacts_path}`, not `/_self/`."
             )
         else:
@@ -847,7 +850,9 @@ def build_system_prompt(agent: Dict[str, Any], injected_system_vars: Dict[str, s
                 "Save with `save_artifact(content=\"...\")` or `save_artifact(source_path=\"...\")`; "
                 "files are also available at `/_self/artifacts/` via file tools. "
                 f"Embed images with `<img src=\"/api/agents/{aid}/artifacts/filename.webp\" alt=\"...\">`. "
-                "On external chat channels, deliver images and files with `send_file`. "
+                "Deliver files to the user with `send_file` (or `save_artifact` for the Artifacts tab). "
+                "Never give local filesystem paths (e.g. `/home/...`, `sandbox:...`) as chat links — "
+                "the user cannot open them. "
                 "`bash`/`runpy` cannot use `/_self/`."
             )
         prompt += "\n\n## Artifacts Directory\n" + artifacts_note
@@ -949,9 +954,18 @@ def build_tools(agent: Dict[str, Any]) -> List[Dict[str, Any]]:
     if agent.get('vision_enabled', 1):
         assigned_ids.add('describe_image')
 
+    # Auto-assign analyze_document for document-enabled agents.
+    if agent.get('document_enabled', 1):
+        assigned_ids.add('analyze_document')
+
     # Auto-assign transcribe_audio for audio-enabled agents.
     if agent.get('audio_enabled'):
         assigned_ids.add('transcribe_audio')
+
+    # Auto-assign monitor wherever bash is available — it is the opt-in way to
+    # be notified about background processes, which only bash can start.
+    if 'bash' in assigned_ids:
+        assigned_ids.add('monitor')
 
     if assigned_ids:
         seen_fn_names = {t['function']['name'] for t in tools if t.get('function', {}).get('name')}
@@ -1131,7 +1145,8 @@ def command_hint_from_content(content: str) -> str:
 
 def build_attachment_note(attachment_info: dict,
                           has_describe_image: bool = True,
-                          audio_enabled: bool = False) -> str:
+                          audio_enabled: bool = False,
+                          document_enabled: bool = True) -> str:
     """Render authoritative attachment metadata for model-visible context.
 
     The database attachment ID is intentionally explicit so the model can call
@@ -1142,7 +1157,7 @@ def build_attachment_note(attachment_info: dict,
     if file_path and not os.path.isabs(file_path):
         file_path = os.path.abspath(os.path.join(_BASE_DIR, file_path))
 
-    filename = attachment_info.get('filename', '')
+    filename = attachment_info.get('original_filename') or attachment_info.get('filename', '')
     mime_type = attachment_info.get('mime_type') or 'application/octet-stream'
     size_bytes = int(attachment_info.get('size_bytes', 0) or 0)
     attachment_id = attachment_info.get('attachment_id')
@@ -1162,12 +1177,21 @@ def build_attachment_note(attachment_info: dict,
         note += "\nUse the `describe_image` tool to view and analyze this image."
     if mime_type.startswith('audio/') and audio_enabled:
         note += "\nUse the `transcribe_audio` tool to listen to this audio."
+    guidance = analysis_guidance(
+        attachment_info.get('original_filename') or filename,
+        mime_type,
+        attachment_id,
+        enabled=document_enabled,
+    )
+    if guidance:
+        note += f"\n{guidance}"
     return note
 
 
 def build_attachment_notes(attachment_infos: list,
                            has_describe_image: bool = True,
-                           audio_enabled: bool = False) -> str:
+                           audio_enabled: bool = False,
+                           document_enabled: bool = True) -> str:
     """Render notes for multiple attachments, numbered when more than one."""
     notes = []
     count = len(attachment_infos)
@@ -1176,6 +1200,7 @@ def build_attachment_notes(attachment_infos: list,
             info,
             has_describe_image=has_describe_image,
             audio_enabled=audio_enabled,
+            document_enabled=document_enabled,
         )
         if count > 1:
             note = note.replace('[Attachment:', f'[Attachment #{index}:', 1)
@@ -1261,12 +1286,14 @@ def sync_session_attachment_manifest(messages: list, session_id: str,
 def append_attachment_note(msg: dict,
                            attachment_info: dict,
                            has_describe_image: bool = True,
-                           audio_enabled: bool = False) -> dict:
+                           audio_enabled: bool = False,
+                           document_enabled: bool = True) -> dict:
     """Append structured attachment metadata to a model message in-place."""
     note = build_attachment_note(
         attachment_info,
         has_describe_image=has_describe_image,
         audio_enabled=audio_enabled,
+        document_enabled=document_enabled,
     )
     content = msg.get('content', '') or ''
     msg['content'] = content.rstrip() + note
@@ -1297,12 +1324,14 @@ def build_message_entry(msg: dict, agent: dict, has_describe_image: bool = True)
             attachment_infos,
             has_describe_image=has_describe_image,
             audio_enabled=bool(agent.get('audio_enabled')),
+            document_enabled=bool(agent.get('document_enabled', 1)),
         )
     elif attachment_info and isinstance(attachment_info, dict):
         attachment_note = build_attachment_note(
             attachment_info,
             has_describe_image=has_describe_image,
             audio_enabled=bool(agent.get('audio_enabled')),
+            document_enabled=bool(agent.get('document_enabled', 1)),
         )
 
     if has_video:

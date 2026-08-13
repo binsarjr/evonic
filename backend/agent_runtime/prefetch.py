@@ -148,6 +148,10 @@ class TurnPrefetcher:
             if agent.get('vision_enabled', 1) and 'describe_image' not in assigned_tool_ids:
                 assigned_tool_ids.append('describe_image')
 
+            # Agents with document analysis enabled automatically get analyze_document.
+            if agent.get('document_enabled', 1) and 'analyze_document' not in assigned_tool_ids:
+                assigned_tool_ids.append('analyze_document')
+
             # Agents with audio_enabled automatically get transcribe_audio.
             if agent.get('audio_enabled') and 'transcribe_audio' not in assigned_tool_ids:
                 assigned_tool_ids.append('transcribe_audio')
@@ -156,6 +160,9 @@ class TurnPrefetcher:
             # build_message_entry so the hint is only injected when available.
             has_describe_image = 'describe_image' in assigned_tool_ids
 
+            from backend.channels.whatsapp_identity import resolve_identity
+            _identity = resolve_identity(ctx.channel_id, ctx.external_user_id)
+
             fresh_agent_context = {
                 'id': agent_id,
                 '_db_agent_id': agent.get('_db_agent_id', agent_id),
@@ -163,6 +170,9 @@ class TurnPrefetcher:
                 'agent_name': agent.get('name', ''),
                 'agent_model': None,
                 'user_id': ctx.external_user_id,
+                'user_phone': _identity['user_phone'],
+                'user_jid': _identity['user_jid'],
+                'user_id_namespace': _identity['user_id_namespace'],
                 'channel_id': ctx.channel_id,
                 'session_id': session_id,
                 'assigned_tool_ids': assigned_tool_ids,
@@ -184,6 +194,7 @@ class TurnPrefetcher:
                 'run_as_user': agent.get('run_as_user'),
                 'vision_model_id': agent.get('vision_model_id'),
                 'vision_enabled': agent.get('vision_enabled', 1),
+                'document_enabled': agent.get('document_enabled', 1),
                 'audio_enabled': agent.get('audio_enabled', 0),
                 'messaging_acl': agent.get('messaging_acl'),
                 'messaging_acl_mode': agent.get('messaging_acl_mode', 'whitelist'),
