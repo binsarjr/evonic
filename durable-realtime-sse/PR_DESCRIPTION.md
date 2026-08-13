@@ -1,4 +1,8 @@
-# Durable realtime chat over one SSE gateway
+# Durable realtime chat across refresh, reconnect, and tabs
+
+This is intentionally a larger-than-usual change, but it solves one problem end to end: Evonic's live chat state currently has no durable source of truth. A refresh during a long turn can make active Thinking or tool progress disappear from the UI, and a message sent in one tab may not appear in another until the page is refreshed.
+
+The diff crosses runtime, storage, SSE, and the browser because those layers currently own different parts of the same turn. Fixing only one layer would leave the race in another.
 
 ## Summary
 
@@ -48,6 +52,21 @@ Tab A renders its own message optimistically, then the runtime saves it and emit
 
 That assumption is correct for Tab A and wrong for Tab B. Tab B can receive the surrounding realtime activity while still not rendering the new user message; a full history refresh finally makes it visible.
 
+## Why this is one cohesive change
+
+The symptoms appear in the browser, but the missing state begins earlier in the lifecycle. Queue acceptance, busy state, runtime telemetry, saved messages, reconnect cursors, and rendering all use different ownership and timing rules. A frontend-only patch cannot replay state the server no longer has; persisting events without changing the history handoff still leaves a race; replacing the busy tracker without updating queue transitions can report idle while accepted work is waiting.
+
+This change therefore follows one turn through the complete path:
+
+- message acceptance creates a durable queued turn;
+- runtime transitions it to running and emits ordered telemetry;
+- history and SSE hand off through one cursor;
+- every tab consumes the same event sequence and deduplicates overlapping sources;
+- completion, cancellation, failure, or restart produces a terminal state;
+- terminal telemetry remains replayable for a bounded period and is then cleaned up.
+
+The breadth is a consequence of closing that lifecycle, not a collection of unrelated features.
+
 ## The durable flow
 
 ![Durable realtime architecture](https://raw.githubusercontent.com/binsarjr/evonic/durable-realtime-sse-assets/durable-realtime-sse/architecture-overview.png)
@@ -90,6 +109,10 @@ This keeps history and telemetry separate without making live state disposable.
 `client_message_id` correlates the sender's optimistic bubble with the durable `message_received` event. The sender keeps one bubble, while every other tab renders the same message immediately. Stable `message_id` values prevent duplicates when history, the POST response, and SSE overlap.
 
 The same stream carries `turn_queued`, `turn_begin`, Thinking updates, tool progress, response chunks, and `done`, so all tabs follow the same turn rather than independently guessing its state.
+
+## Agent-to-agent delivery
+
+Agent-to-agent calls use the same queued/running/terminal lifecycle. The sender now registers its completion waiter before dispatching the target agent, preventing a fast target from completing before the sender is ready to observe the result. A target can wake the waiting agent even when no human-facing channel route exists, while any browser viewing the session receives the same durable activity through the gateway.
 
 ## Refresh and reconnect
 
@@ -143,16 +166,34 @@ The implementation keeps that cost bounded: it uses a dedicated SQLite WAL datab
 - Expired cursors reload stable history instead of silently skipping unavailable telemetry.
 - Restarted servers report abandoned turns as interrupted instead of leaving a false busy state.
 - Chat delivery no longer depends on content polling or process-local replay buffers.
+- Agent-to-agent completion cannot outrun waiter registration or depend on a human delivery route.
 
 ## Testing
 
 ```text
-./venv/bin/pytest -q \
+pytest -q \
+  unit_tests/test_agent_messaging.py \
+  unit_tests/test_chat_sessions.py \
   unit_tests/test_chat_buffer_replay.py \
   unit_tests/test_frontend_sse_lifecycle.py \
-  unit_tests/test_state_changed_sse.py
+  unit_tests/test_sse_connection_limit.py \
+  unit_tests/test_state_changed_sse.py \
+  unit_tests/test_test_isolation.py
 
-37 passed
+146 passed
+
+pytest -q plugins/kanban/tests
+
+105 passed
+
+cd evonet && go test ./...
+
+ok github.com/evonic/evonet/internal/executor
+ok github.com/evonic/evonet/internal/ws
 ```
 
-The focused suite covers durable ordering and scoping, the dedicated database path, one-hour terminal retention, active-turn replay, monotonic cursors after cleanup, history resync, payload bounds, history-cursor handoff, invalid and future cursors, `Last-Event-ID`, cross-tab delivery, optimistic deduplication, long-turn UI behavior, atomic queued-turn cancellation, restart recovery without duplicate terminal events, session cleanup, approval snapshots, cache busting, and legacy route compatibility.
+The focused suite covers durable ordering and scoping, the dedicated database path, one-hour terminal retention, active-turn replay, monotonic cursors after cleanup, history resync, payload bounds, history-cursor handoff, invalid and future cursors, `Last-Event-ID`, cross-tab delivery, optimistic deduplication, long-turn UI behavior, atomic queued-turn cancellation, agent-to-agent completion races, restart recovery without duplicate terminal events, session cleanup, approval snapshots, cache busting, test isolation, and legacy route compatibility.
+
+The full local unit suite completed with `2158 passed`, `84 skipped`, and five failures. The same five failures reproduce on the clean `dev` base: two artifact-path expectations tied to another checkout path, one environment-dependent local classifier expectation, one Python 3.13 SFTP mock incompatibility, and one pre-existing token-budget assertion. No additional failure appears on this branch.
+
+Manual browser validation covered two tabs on the same session, optimistic message deduplication, queued and split turns, refresh while a turn is active, reconnect replay, agent switching, stop/cancel behavior, and agent-to-agent delivery without a human-facing route.
