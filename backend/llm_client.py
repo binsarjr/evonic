@@ -14,6 +14,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import requests
 
 import config
+from backend.reasoning_capabilities import apply_reasoning_effort
+from backend.reasoning_effort_error import ReasoningEffortError
 from backend.normalizer import normalize_llm_text
 from evaluator.api_logger import log_api_call
 from evaluator.gemma4_parser import is_gemma4_format, strip_gemma4_thinking
@@ -21,6 +23,7 @@ from evaluator.gemma4_parser import is_gemma4_format, strip_gemma4_thinking
 # ── Centralized error formatting ──────────────────────────────────────────────
 
 _LLM_ERROR_MESSAGES = {
+    "configuration_error": "The model configuration is invalid.",
     "api_error": "The LLM API is temporarily unavailable.",
     "rate_limit_error": "API rate limit exceeded. Please wait and try again.",
     "auth_error": "API authentication failed. Check your API key.",
@@ -297,6 +300,7 @@ class LLMClient:
                          and optional service_tier.
                          If None, uses the default model from DB or config.py defaults.
         """
+        self.reasoning_effort = None
         self.provider = None
         self.service_tier = model_config.get("service_tier") if model_config else None
         self._model_api_key_override = False
@@ -307,6 +311,7 @@ class LLMClient:
                 model_config = db.resolve_model_config(model_config)
             except Exception:
                 pass
+            self.reasoning_effort = model_config.get("reasoning_effort")
             self.provider = model_config.get("provider")
             self.base_url = model_config.get("base_url")
             self.api_key = model_config.get("api_key")
@@ -325,6 +330,7 @@ class LLMClient:
                 if dm:
                     self._model_api_key_override = bool(dm.get("api_key"))
                     dm = db.resolve_model_config(dm)
+                    self.reasoning_effort = dm.get("reasoning_effort")
                     self.provider = dm.get("provider")
                     self.base_url = dm.get("base_url")
                     self.api_key = dm.get("api_key")
@@ -457,6 +463,7 @@ class LLMClient:
         max_tokens: Optional[int] = None,
         log_file: Optional[str] = None,
         tool_choice: Optional[str] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Delegate chat completion to CodexClient (Responses API)."""
         from models.db import db as _db
@@ -484,6 +491,7 @@ class LLMClient:
             temperature=temperature if temperature is not None else self.temperature,
             tools=tools,
             reasoning=bool(self.thinking),
+            reasoning_effort=reasoning_effort,
             timeout=self.timeout or 120,
             tool_choice=tool_choice,
             service_tier=getattr(self, "service_tier", None),
@@ -608,11 +616,24 @@ class LLMClient:
             exponential backoff (max 60s between retries). Configurable
             retry count via llm_max_retries setting (DB default: 5).
         """
+        effort = None
+        if enable_thinking and getattr(self, 'reasoning_effort', None) is not None:
+            from models.db import db
+            try:
+                effort = db.validate_model_reasoning({
+                    'provider': self.provider, 'base_url': self.base_url,
+                    'api_format': self.api_format, 'model_name': self.model,
+                    'reasoning_effort': self.reasoning_effort,
+                })
+            except ReasoningEffortError as e:
+                return {'success': False, 'duration_ms': 0,
+                        'response': {'error': _format_llm_error('configuration_error')},
+                        'error_type': 'configuration_error', 'error_detail': str(e)}
         provider_messages = _normalize_system_messages(messages)
         if self.api_format == "codex":
             return self._codex_chat_completion(
                 provider_messages, tools, temperature, max_tokens, log_file,
-                tool_choice)
+                tool_choice, reasoning_effort=effort)
 
         is_ollama_fmt = self.api_format == "ollama" or (
             self.base_url and "ollama.com" in self.base_url
@@ -805,6 +826,8 @@ class LLMClient:
         except Exception:
             max_retries = self.max_retries if self.max_retries is not None else 5
         last_error_result = None
+
+        apply_reasoning_effort(payload, {'base_url': self.base_url, 'api_format': self.api_format}, effort)
 
         for attempt in range(1 + max_retries):
             try:

@@ -172,6 +172,7 @@ window.settingsModels = {
                 ${model.is_default ? '<span class="inline-block bg-indigo-600 text-white px-1.5 py-0.5 rounded text-[10px] font-semibold leading-none">Default</span>' : ""}
                 <span class="inline-block px-1.5 py-0.5 rounded text-[11px] font-medium ${typeColors}">${model.type}</span>
                 <span class="inline-block px-1.5 py-0.5 rounded text-[11px] font-medium ${enabledColors}">${model.enabled ? "On" : "Off"}</span>
+                ${model.reasoning_effort || model.reasoning_capabilities?.efforts.length ? `<span class="inline-block px-1.5 py-0.5 rounded text-[11px] font-medium bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300">Reasoning: ${this._escapeHtml(model.reasoning_effort || "Default")}</span>` : ""}
                 ${model.thinking ? '<span class="inline-block px-1.5 py-0.5 rounded text-[11px] font-medium bg-yellow-100 text-yellow-700 dark:bg-yellow-900/50 dark:text-yellow-300">Thinking</span>' : ""}
             </div>
 
@@ -368,11 +369,95 @@ window.settingsModels = {
 
     /* ---- Model CRUD ---- */
 
+    resetReasoningEffort(effort = null) {
+        document.getElementById("model-advanced-settings").open = false;
+        this._reasoningKey = null;
+        this._reasoningEffort = effort;
+    },
+
+    changeModelProvider() {
+        const provider = this.providers.find((p) => p.id === document.getElementById("model-provider").value);
+        document.getElementById("model-base-url").value = "";
+        document.getElementById("model-api-format").value = provider?.api_format || "openai";
+        this.toggleFields();
+    },
+
+    updateReasoningOptions() {
+        const provider = document.getElementById("model-provider").value;
+        const params = new URLSearchParams({
+            model_name: document.getElementById("model-name-param").value,
+            base_url: document.getElementById("model-base-url").value,
+            api_format: document.getElementById("model-api-format").value,
+        });
+        const key = provider + "?" + params;
+        if (this._reasoningKey !== null && this._reasoningKey !== key) {
+            this._reasoningEffort = null;
+        }
+        this._reasoningKey = key;
+        const request = (this._reasoningRequest || 0) + 1;
+        this._reasoningRequest = request;
+        const select = document.getElementById("model-reasoning-effort");
+        select.disabled = true;
+        this._reasoningLookup = (async () => {
+            let result;
+            try {
+                result = provider ? await apiGet("/api/providers/" + encodeURIComponent(provider)
+                    + "/reasoning-capabilities?" + params) : {};
+                if (result.error) throw new Error(result.error);
+            } catch (error) {
+                result = { error: "Could not load support. Refresh support or select Default (provider)." };
+            }
+            if (request !== this._reasoningRequest) return;
+            const caps = result.reasoning_capabilities || { efforts: [] };
+            this._reasoningOptions = caps.efforts;
+            select.replaceChildren(new Option("Default (provider)", ""));
+            caps.efforts.forEach((effort) => select.add(new Option(effort, effort)));
+            const stale = this._reasoningEffort && !caps.efforts.includes(this._reasoningEffort);
+            if (stale) select.add(new Option(this._reasoningEffort + " (support not detected)", this._reasoningEffort));
+            select.value = this._reasoningEffort || "";
+            select.disabled = false;
+            select.setCustomValidity(stale ? "Refresh support or select Default (provider)." : "");
+            document.getElementById("reasoning-effort-group").style.display =
+                result.reasoning_supported || stale || result.error ? "block" : "none";
+            document.getElementById("reasoning-effort-hint").textContent = result.error || (stale
+                ? "Saved effort is no longer detected. Refresh support or select Default (provider)."
+                : caps.efforts.length ? "Default follows the provider; it does not disable reasoning" + (caps.default_effort ? " (" + caps.default_effort + ")" : "") + "."
+                : "Effort support has not been detected for this model. Fetch models to refresh support.");
+            document.getElementById("reasoning-effort-refresh").style.display = result.can_refresh ? "inline-block" : "none";
+        })();
+        return this._reasoningLookup;
+    },
+
+    changeReasoningEffort() {
+        const select = document.getElementById("model-reasoning-effort");
+        this._reasoningEffort = select.value || null;
+        select.setCustomValidity(!select.value || this._reasoningOptions.includes(select.value)
+            ? "" : "Refresh support or select Default (provider).");
+    },
+
+    async refreshReasoningSupport() {
+        const provider = document.getElementById("model-provider").value;
+        const button = document.getElementById("reasoning-effort-refresh");
+        button.disabled = true;
+        try {
+            const result = await apiPost("/api/providers/" + encodeURIComponent(provider) + "/fetch-models", {});
+            if (result.error) throw new Error(result.error);
+            if (provider === document.getElementById("model-provider").value) await this.updateReasoningOptions();
+            ModelsCache.invalidate();
+        } catch (error) {
+            if (window.toast) toast.show("Failed to refresh support: " + error.message, "error");
+        } finally {
+            button.disabled = false;
+        }
+    },
+
     showAddModelModal() {
         document.getElementById("modal-title").textContent = "Add Model";
         document.getElementById("model-form").reset();
+        this.resetReasoningEffort();
         document.getElementById("model-id").value = "";
         this._populateProviderSelect();
+        this.toggleFields();
         openModal("model-modal");
     },
 
@@ -382,6 +467,7 @@ window.settingsModels = {
 
         document.getElementById("modal-title").textContent = "Add Model — " + (prov.name || providerId);
         document.getElementById("model-form").reset();
+        this.resetReasoningEffort();
         document.getElementById("model-id").value = "";
         this._populateProviderSelect();
         document.getElementById("model-provider").value = providerId;
@@ -396,6 +482,7 @@ window.settingsModels = {
         const model = this.models.find((m) => m.id === modelId);
         if (!model) return;
 
+        this.resetReasoningEffort(model.reasoning_effort);
         document.getElementById("modal-title").textContent = "Edit Model";
         document.getElementById("model-id").value = model.id;
         document.getElementById("model-name").value = model.name || "";
@@ -426,6 +513,7 @@ window.settingsModels = {
     },
 
     toggleFields() {
+        this.updateReasoningOptions();
         const type = document.getElementById("model-type").value;
         const provider = document.getElementById("model-provider").value;
         const apiKeyGroup = document.getElementById("api-key-group");
@@ -442,6 +530,8 @@ window.settingsModels = {
 
     async save(event) {
         event.preventDefault();
+        await this._reasoningLookup;
+        if (!document.getElementById("model-form").reportValidity()) return;
 
         const modelId = document.getElementById("model-id").value;
         const modelData = {
@@ -462,6 +552,7 @@ window.settingsModels = {
                 document.getElementById("model-temperature").value !== ""
                     ? parseFloat(document.getElementById("model-temperature").value)
                     : null,
+            reasoning_effort: this._reasoningEffort || null,
             thinking: document.getElementById("model-thinking").checked ? 1 : 0,
             thinking_budget:
                 parseInt(document.getElementById("model-thinking-budget").value) || 0,
