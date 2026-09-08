@@ -5,10 +5,6 @@ const vm = require("node:vm");
 
 // settings.css makes .hidden !important, overriding the inline display toggle.
 const template = fs.readFileSync("templates/partials/settings/models.html", "utf8");
-const advanced = template.match(/<details[^>]*id="model-advanced-settings"[\s\S]*?<\/details>/)[0];
-assert.ok(advanced.includes('id="model-thinking"'));
-assert.ok(advanced.includes('id="model-thinking-budget"'));
-assert.ok(!advanced.includes('id="model-reasoning-effort"'));
 for (const id of ["reasoning-effort-group", "reasoning-effort-refresh"]) {
     const tag = template.match(new RegExp(`<[^>]*id="${id}"[^>]*>`))[0];
     assert.ok(!/class="[^"]*\bhidden\b/.test(tag), `${id} must allow inline display`);
@@ -17,7 +13,7 @@ for (const id of ["reasoning-effort-group", "reasoning-effort-refresh"]) {
 const elements = new Map();
 function element(id) {
     if (!elements.has(id)) elements.set(id, {
-        value: "", style: {}, disabled: false, options: [],
+        id, value: "", style: {}, disabled: false, options: [],
         replaceChildren(...options) { this.options = options; },
         add(option) { this.options.push(option); },
         setCustomValidity(message) { this.validationMessage = message; },
@@ -41,7 +37,6 @@ const supported = { reasoning_supported: true, can_refresh: true,
     element("model-api-format").value = "openai";
     lookup = async () => supported;
     settings.resetReasoningEffort("max");
-    assert.equal(element("model-advanced-settings").open, false);
     await settings.updateReasoningOptions();
     const select = element("model-reasoning-effort");
     assert.equal(select.value, "max");
@@ -49,7 +44,7 @@ const supported = { reasoning_supported: true, can_refresh: true,
     assert.equal(element("reasoning-effort-group").style.display, "block");
     assert.equal(select.validationMessage, "");
 
-    // Changing the model resets the effort; an unsupported provider hides the field.
+    // Changing the model resets the effort; unsupported providers explain the default.
     element("model-name-param").value = "unknown";
     await settings.updateReasoningOptions();
     assert.equal(settings._reasoningEffort, null);
@@ -61,7 +56,28 @@ const supported = { reasoning_supported: true, can_refresh: true,
     await settings._reasoningLookup;
     assert.equal(element("model-base-url").value, "");
     assert.equal(element("model-api-format").value, "openai");
-    assert.equal(element("reasoning-effort-group").style.display, "none");
+    assert.equal(element("reasoning-effort-group").style.display, "block");
+
+    // Unknown models use a manual input; discovery switches back to a dropdown.
+    element("model-provider").value = "codex";
+    element("model-name-param").value = "new-model";
+    lookup = async () => ({reasoning_supported: true,
+        reasoning_capabilities: {efforts: [], manual: true}});
+    settings.resetReasoningEffort("custom_level");
+    await settings.updateReasoningOptions();
+    const manual = element("model-reasoning-effort-manual");
+    assert.equal(manual.value, "custom_level");
+    assert.equal(manual.disabled, false);
+    assert.equal(select.disabled, true);
+    assert.equal(element("reasoning-effort-label").htmlFor, manual.id);
+    manual.value = "high";
+    settings.changeReasoningEffort();
+    assert.equal(settings._reasoningEffort, "high");
+    lookup = async () => supported;
+    await settings.updateReasoningOptions();
+    assert.equal(select.value, "high");
+    assert.equal(manual.disabled, true);
+    assert.equal(select.disabled, false);
 
     // A failed lookup must not silently discard a saved value.
     settings.resetReasoningEffort("max");

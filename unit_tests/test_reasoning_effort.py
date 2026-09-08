@@ -43,7 +43,7 @@ def test_metadata_is_per_model_and_endpoint_bound():
         'default_reasoning_level': 'low',
     }, {'id': 'two', 'supported_reasoning_levels': [{'effort': 'high'}]}])
     assert db.get_model_reasoning_capabilities(_model(model_name='one')) == {
-        'efforts': ['low', 'ultra'], 'default_effort': 'low',
+        'efforts': ['low', 'ultra'], 'default_effort': 'low', 'manual': False,
     }
     assert db.get_model_reasoning_capabilities(_model(model_name='two'))['efforts'] == ['high']
     assert db.get_model_reasoning_capabilities(_model(model_name='unknown'))['efforts'] == []
@@ -61,7 +61,7 @@ def test_anthropic_uses_advertised_levels_only():
     metadata = {'capabilities': {'effort': {'supported': True, 'low': {'supported': True},
                 'high': {'supported': True}, 'max': {'supported': False}}}}
     assert model_reasoning_capabilities(provider, metadata) == {
-        'efforts': ['low', 'high'], 'default_effort': 'high',
+        'efforts': ['low', 'high'], 'default_effort': 'high', 'manual': False,
     }
     assert model_reasoning_capabilities(provider)['efforts'] == []
     payload = {'output_config': {'format': {'type': 'json_schema'}}}
@@ -237,3 +237,40 @@ def test_reasoning_dropdown_behavior():
         pytest.skip('Node.js is required for frontend behavior checks')
     subprocess.run([node, 'unit_tests/test_settings_models_reasoning.js'],
                    cwd=Path(__file__).resolve().parents[1], check=True, timeout=15)
+
+
+@pytest.mark.parametrize('api_format,url,field', [
+    ('codex', 'https://chatgpt.com/backend-api/codex', 'reasoning'),
+    ('anthropic', 'https://api.anthropic.com/v1', 'output_config'),
+    ('openai', 'https://api.deepseek.com/v1', 'reasoning_effort'),
+])
+def test_unidentified_model_accepts_manual_effort(client, api_format, url, field):
+    provider = _provider(api_format, url)
+    model = _model(model_name='new-model', reasoning_effort='custom_level')
+    caps = db.get_model_reasoning_capabilities(model)
+    assert caps['manual'] is True and caps['efforts'] == []
+    created = client.post('/api/models', json=model)
+    assert created.status_code == 200
+    mid = created.json['model_id']
+    saved = client.get('/api/models/' + mid).json
+    assert saved['reasoning_effort'] == 'custom_level'
+    assert saved['reasoning_capabilities']['manual'] is True
+    resolved = db.resolve_model_config(saved)
+    payload = {}
+    apply_reasoning_effort(payload, resolved, db.validate_model_reasoning(saved))
+    assert payload[field] == ('custom_level' if field == 'reasoning_effort' else {'effort': 'custom_level'})
+    for invalid in ('high!', 'a' * 33, 123):
+        assert client.put('/api/models/' + mid, json={'reasoning_effort': invalid}).status_code == 400
+    assert client.put('/api/models/' + mid, json={'reasoning_effort': ''}).status_code == 200
+    assert db.get_model_by_id(mid)['reasoning_effort'] is None
+    assert not db.get_model_reasoning_capabilities({**model, 'base_url': 'https://gateway.example'})['manual']
+
+
+def test_explicitly_unsupported_metadata_disables_manual_effort():
+    provider = _provider('anthropic', 'https://api.anthropic.com/v1')
+    db.save_provider_model_capabilities(provider, [{'id': 'no-reasoning',
+        'capabilities': {'effort': {'supported': False}}}])
+    model = _model(model_name='no-reasoning', reasoning_effort='high')
+    assert db.get_model_reasoning_capabilities(model)['manual'] is False
+    with pytest.raises(ReasoningEffortError):
+        db.validate_model_reasoning(model)

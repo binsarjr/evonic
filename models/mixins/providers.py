@@ -151,8 +151,9 @@ class ProvidersMixin:
         if (snapshot.get('base_url') == (resolved.get('base_url') or '').rstrip('/')
                 and snapshot.get('api_format') == resolved.get('api_format', 'openai')):
             cached = snapshot.get('models', {}).get(resolved.get('model_name'))
-            if isinstance(cached, dict) and cached.get('efforts'):
-                return reasoning_capabilities(cached.get('efforts', []), cached.get('default_effort'))
+            if isinstance(cached, dict) and (cached.get('efforts') or 'manual' in cached):
+                return reasoning_capabilities(cached.get('efforts', []), cached.get('default_effort'),
+                                              cached.get('manual', False))
         return model_reasoning_capabilities(resolved)
 
     def validate_model_reasoning(self, model):
