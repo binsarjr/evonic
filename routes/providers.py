@@ -6,6 +6,7 @@ from flask import Blueprint, jsonify, request
 
 from models.db import db
 from backend.provider.adapters import get_provider
+from backend.provider.base import ReasoningEffortError
 
 providers_bp = Blueprint("providers", __name__)
 
@@ -16,6 +17,7 @@ def _sanitize(provider: Dict[str, Any]) -> Dict[str, Any]:
     provider["credential_configured"] = bool(provider.get("api_key")) or (
         provider.get("credential_source") == "claude_code"
     )
+    provider.pop("model_capabilities", None)
     for key in _SENSITIVE_KEYS:
         provider.pop(key, None)
     return provider
@@ -133,8 +135,14 @@ def api_fetch_provider_models(provider_id):
                 "status_code": resp.status_code,
             })
 
-        discovered = adapter.parse_models(resp.json())
-        models = [{"id": m["id"], "name": m["name"]} for m in discovered]
+        raw = resp.json()
+        discovered = adapter.parse_models(raw)
+        # Keep the last verified snapshot if Codex returns an empty catalog fallback.
+        if adapter.supports_reasoning_effort and (raw.get('models') or raw.get('data')):
+            db.save_provider_model_capabilities(provider, discovered)
+        models = [{"id": m["id"], "name": m["name"],
+                   "reasoning_capabilities": adapter.get_reasoning_capabilities(m["id"], m)}
+                  for m in discovered]
 
         # Mark which ones are already added
         existing = {m["model_name"] for m in db.get_models_by_provider(provider_id)}
@@ -149,6 +157,30 @@ def api_fetch_provider_models(provider_id):
         return jsonify({"success": False, "error": f"Connection error: {str(e)[:200]}"}), 400
     except Exception as e:
         return jsonify({"success": False, "error": f"Error: {str(e)[:200]}"}), 500
+
+
+@providers_bp.route("/api/providers/<provider_id>/reasoning-capabilities", methods=["GET"])
+def api_model_reasoning_capabilities(provider_id):
+    """Resolve support for the Add/Edit form using the same rules as inference."""
+    provider = db.get_provider(provider_id)
+    if not provider:
+        return jsonify({"error": "Provider not found"}), 404
+    model = {"provider": provider_id, "model_name": request.args.get("model_name", ""),
+             "base_url": request.args.get("base_url", ""),
+             "api_format": request.args.get("api_format", "openai")}
+    try:
+        resolved = db.resolve_model_config(model, provider)
+        adapter = get_provider(resolved)
+        capabilities = db.get_model_reasoning_capabilities(model, provider)
+    except ValueError:
+        return jsonify({"error": "Invalid provider endpoint"}), 400
+    return jsonify({
+        "reasoning_capabilities": capabilities,
+        "reasoning_supported": adapter.supports_reasoning_effort,
+        "can_refresh": (adapter.supports_reasoning_effort
+                        and adapter.base_url == (provider.get("base_url") or "").rstrip("/")
+                        and resolved.get("api_format") == provider.get("api_format")),
+    })
 
 
 @providers_bp.route("/api/providers/<provider_id>/test", methods=["POST"])
@@ -235,12 +267,15 @@ def api_add_model_from_provider(provider_id):
         "timeout": data.get("timeout", 60),
         "thinking": data.get("thinking", 0),
         "thinking_budget": data.get("thinking_budget", 0),
+        "reasoning_effort": data.get("reasoning_effort"),
         "enabled": 1,
         "api_format": provider.get("api_format", "openai"),
     }
 
     try:
         new_id = db.create_model(model_data)
+    except ReasoningEffortError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
     except ValueError as e:
         return jsonify({"success": False, "error": str(e)}), 409
 

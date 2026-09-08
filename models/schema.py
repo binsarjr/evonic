@@ -784,6 +784,7 @@ class SchemaMixin:
                 "refresh_token TEXT",
                 "token_expires_at INTEGER",
                 "credential_source TEXT DEFAULT 'api_key'",
+                "model_capabilities TEXT DEFAULT '{}'",
             ]:
                 try:
                     cursor.execute(f"ALTER TABLE providers ADD COLUMN {col}")
@@ -843,6 +844,12 @@ class SchemaMixin:
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+
+            # Provider-default reasoning is preserved for existing models.
+            try:
+                cursor.execute("ALTER TABLE llm_models ADD COLUMN reasoning_effort TEXT DEFAULT NULL")
+            except sqlite3.OperationalError:
+                pass
 
             # Migration: add temperature column to llm_models if missing
             try:

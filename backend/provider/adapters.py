@@ -1,10 +1,11 @@
 """Provider adapters for the API formats supported by Evonic."""
 
 import json
+from urllib.parse import urlsplit
 
 import httpx
 
-from backend.provider.base import BaseProvider
+from backend.provider.base import BaseProvider, reasoning_capabilities
 
 CODEX_CLIENT_VERSION = "0.153.4"
 
@@ -104,6 +105,23 @@ class AnthropicProvider(OpenAIProvider):
     """Anthropic Messages payloads and responses."""
 
     completion_path = "/messages"
+    reasoning_host = "api.anthropic.com"
+
+    def get_reasoning_capabilities(self, model, metadata=None):
+        if not self.supports_reasoning_effort:
+            return reasoning_capabilities()
+        capabilities = (metadata or {}).get("capabilities")
+        effort = capabilities.get("effort") if isinstance(capabilities, dict) else None
+        if not isinstance(effort, dict) or not effort.get("supported"):
+            return reasoning_capabilities()
+        # The Models API advertises support per level, including model-specific max/xhigh.
+        levels = [level for level in ("low", "medium", "high", "xhigh", "max")
+                  if isinstance(effort.get(level), dict) and effort[level].get("supported")]
+        return reasoning_capabilities(levels, "high")
+
+    def apply_reasoning_effort(self, payload, effort):
+        if effort is not None:
+            payload.setdefault("output_config", {})["effort"] = effort
 
     def build_payload(self, model, messages, max_tokens, temperature=None,
                       tools=None, tool_choice=None, oauth=False):
@@ -209,6 +227,23 @@ class CodexProvider(OpenAIProvider):
 
     completion_path = "/responses"
     http_client = httpx
+    reasoning_host = "chatgpt.com"
+
+    def get_reasoning_capabilities(self, model, metadata=None):
+        if not self.supports_reasoning_effort:
+            return reasoning_capabilities()
+        metadata = metadata or {}
+        levels = metadata.get("supported_reasoning_levels")
+        if not isinstance(levels, list):
+            return reasoning_capabilities()
+        return reasoning_capabilities(
+            [item.get("effort") for item in levels if isinstance(item, dict)],
+            metadata.get("default_reasoning_level"),
+        )
+
+    def apply_reasoning_effort(self, payload, effort):
+        if effort is not None:
+            payload.setdefault("reasoning", {})["effort"] = effort
 
     def discovery_params(self):
         return {"client_version": CODEX_CLIENT_VERSION}
@@ -252,15 +287,36 @@ class CodexProvider(OpenAIProvider):
         return payload
 
 
+class DeepSeekProvider(OpenAIProvider):
+    """Direct DeepSeek API, reusing the OpenAI-compatible wire format."""
+
+    reasoning_host = "api.deepseek.com"
+
+    def get_reasoning_capabilities(self, model, metadata=None):
+        # /models only returns IDs. Keep documented support here until it gains capabilities.
+        # https://api-docs.deepseek.com/api/create-chat-completion/
+        if self.supports_reasoning_effort and model in {
+            "deepseek-v4-flash", "deepseek-v4-pro", "deepseek-v4-flash-vision-exp",
+        }:
+            return reasoning_capabilities(["low", "high", "max"], "high")
+        return reasoning_capabilities()
+
+    def apply_reasoning_effort(self, payload, effort):
+        if effort is not None:
+            payload["reasoning_effort"] = effort
+
+
 def get_provider(config):
     """Select the adapter using the effective API format and endpoint."""
     api_format = config.get("api_format", "openai")
     if api_format == "codex":
         cls = CodexProvider
-    elif api_format == "anthropic":
-        cls = AnthropicProvider
     elif api_format == "ollama" or "ollama.com" in (config.get("base_url") or ""):
         cls = OllamaProvider
+    elif api_format == "anthropic":
+        cls = AnthropicProvider
+    elif api_format == "openai" and urlsplit(config.get("base_url") or "").hostname == "api.deepseek.com":
+        cls = DeepSeekProvider
     else:
         cls = OpenAIProvider
     return cls(config)

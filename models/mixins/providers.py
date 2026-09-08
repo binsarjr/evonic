@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from typing import Dict, Any, List, Optional
 
@@ -15,7 +16,7 @@ class ProvidersMixin:
             cursor.execute(
                 "SELECT id, name, type, base_url, api_key, api_format, enabled, "
                 "auth_type, refresh_token, token_expires_at, credential_source, "
-                "created_at, updated_at FROM providers ORDER BY name"
+                "created_at, updated_at, model_capabilities FROM providers ORDER BY name"
             )
             return [dict(row) for row in cursor.fetchall()]
 
@@ -26,7 +27,7 @@ class ProvidersMixin:
             cursor.execute(
                 "SELECT id, name, type, base_url, api_key, api_format, enabled, "
                 "auth_type, refresh_token, token_expires_at, credential_source, "
-                "created_at, updated_at FROM providers WHERE id = ?",
+                "created_at, updated_at, model_capabilities FROM providers WHERE id = ?",
                 (provider_id,),
             )
             row = cursor.fetchone()
@@ -60,6 +61,10 @@ class ProvidersMixin:
         updates = {k: v for k, v in data.items() if k in allowed}
         if not updates:
             return False
+        current = self.get_provider(provider_id)
+        if current and any(key in updates and updates[key] != current.get(key)
+                           for key in ('base_url', 'api_format')):
+            updates['model_capabilities'] = '{}'
         set_clause = ", ".join(f"{k} = ?" for k in updates)
         values = list(updates.values()) + [provider_id]
         with self._connect() as conn:
@@ -91,15 +96,15 @@ class ProvidersMixin:
                 "SELECT id, name, type, provider, base_url, api_key, model_name, "
                 "max_tokens, timeout, thinking, thinking_budget, temperature, "
                 "enabled, is_default, created_at, updated_at, model_max_concurrent, "
-                "api_format, vision_supported, legacy_id, shortcode, context_window "
+                "api_format, vision_supported, legacy_id, shortcode, context_window, reasoning_effort "
                 "FROM llm_models WHERE provider = ? ORDER BY name",
                 (provider_id,),
             )
             return [dict(row) for row in cursor.fetchall()]
 
-    def resolve_model_config(self, model: Dict[str, Any]) -> Dict[str, Any]:
+    def resolve_model_config(self, model: Dict[str, Any], provider=None) -> Dict[str, Any]:
         """Fill in base_url/api_key/api_format from the provider if the model's own are empty."""
-        provider = self.get_provider(model.get("provider", ""))
+        provider = provider or self.get_provider(model.get("provider", ""))
         if not provider:
             return model
         result = dict(model)
@@ -112,3 +117,49 @@ class ProvidersMixin:
             if pf and pf != "openai":
                 result["api_format"] = pf
         return result
+
+    def save_provider_model_capabilities(self, provider, discovered) -> None:
+        """Store only normalized capabilities, bound to the discovery endpoint."""
+        from backend.provider.adapters import get_provider
+        adapter = get_provider(provider)
+        snapshot = {
+            'base_url': adapter.base_url,
+            'api_format': provider.get('api_format', 'openai'),
+            'models': {m['id']: adapter.get_reasoning_capabilities(m['id'], m)
+                       for m in discovered},
+        }
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE providers SET model_capabilities = ? "
+                "WHERE id = ? AND COALESCE(base_url, '') = ? AND api_format = ?",
+                (json.dumps(snapshot), provider['id'], provider.get('base_url') or '',
+                 provider.get('api_format', 'openai')),
+            )
+            conn.commit()
+
+    def get_model_reasoning_capabilities(self, model, provider=None):
+        """Resolve support for the effective model, never a gateway's model name alone."""
+        from backend.provider.adapters import get_provider
+        from backend.provider.base import reasoning_capabilities
+        provider = provider or self.get_provider(model.get('provider', ''))
+        resolved = self.resolve_model_config(model, provider)
+        adapter = get_provider(resolved)
+        if not adapter.supports_reasoning_effort:
+            return reasoning_capabilities()
+        try:
+            snapshot = json.loads((provider or {}).get('model_capabilities') or '{}')
+        except (TypeError, ValueError):
+            snapshot = {}
+        if (snapshot.get('base_url') == adapter.base_url
+                and snapshot.get('api_format') == resolved.get('api_format', 'openai')):
+            cached = snapshot.get('models', {}).get(resolved.get('model_name'))
+            if isinstance(cached, dict):
+                return reasoning_capabilities(cached.get('efforts', []), cached.get('default_effort'))
+        return adapter.get_reasoning_capabilities(resolved.get('model_name'))
+
+    def validate_model_reasoning(self, model):
+        from backend.provider.base import validate_reasoning_effort
+        effort = model.get('reasoning_effort')
+        if effort is None or effort == '':
+            return None
+        return validate_reasoning_effort(effort, self.get_model_reasoning_capabilities(model))

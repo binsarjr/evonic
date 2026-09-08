@@ -15,6 +15,7 @@ import requests
 
 import config
 from backend.provider.adapters import get_provider
+from backend.provider.base import ReasoningEffortError
 from backend.normalizer import normalize_llm_text
 from evaluator.api_logger import log_api_call
 from evaluator.gemma4_parser import is_gemma4_format, strip_gemma4_thinking
@@ -22,6 +23,7 @@ from evaluator.gemma4_parser import is_gemma4_format, strip_gemma4_thinking
 # ── Centralized error formatting ──────────────────────────────────────────────
 
 _LLM_ERROR_MESSAGES = {
+    "configuration_error": "Invalid model reasoning effort. Refresh models or select Default in Settings.",
     "api_error": "The LLM API is temporarily unavailable.",
     "rate_limit_error": "API rate limit exceeded. Please wait and try again.",
     "auth_error": "API authentication failed. Check your API key.",
@@ -295,10 +297,11 @@ class LLMClient:
         Args:
             model_config: Dict with keys: base_url, api_key, model_name, timeout,
                          thinking (bool), thinking_budget (int), max_tokens, temperature,
-                         and optional service_tier.
+                         and optional service_tier and reasoning_effort.
                          If None, uses the default model from DB or config.py defaults.
         """
         self.provider = None
+        self.reasoning_effort = None
         self.service_tier = model_config.get("service_tier") if model_config else None
         self._model_api_key_override = False
         if model_config:
@@ -315,6 +318,7 @@ class LLMClient:
             self.timeout = model_config.get("timeout")
             self.thinking = model_config.get("thinking", False)
             self.thinking_budget = model_config.get("thinking_budget", 0)
+            self.reasoning_effort = model_config.get("reasoning_effort")
             self.max_tokens = model_config.get("max_tokens")
             self.temperature = model_config.get("temperature")
             self.api_format = model_config.get("api_format", "openai")
@@ -333,6 +337,7 @@ class LLMClient:
                     self.timeout = dm.get("timeout")
                     self.thinking = bool(dm.get("thinking", False))
                     self.thinking_budget = int(dm.get("thinking_budget", 0))
+                    self.reasoning_effort = dm.get("reasoning_effort")
                     self.max_tokens = dm.get("max_tokens")
                     self.temperature = dm.get("temperature")
                     self.api_format = dm.get("api_format", "openai")
@@ -458,6 +463,7 @@ class LLMClient:
         max_tokens: Optional[int] = None,
         log_file: Optional[str] = None,
         tool_choice: Optional[str] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Delegate chat completion to CodexClient (Responses API)."""
         from models.db import db as _db
@@ -485,6 +491,7 @@ class LLMClient:
             temperature=temperature if temperature is not None else self.temperature,
             tools=tools,
             reasoning=bool(self.thinking),
+            reasoning_effort=reasoning_effort,
             timeout=self.timeout or 120,
             tool_choice=tool_choice,
             service_tier=getattr(self, "service_tier", None),
@@ -594,7 +601,8 @@ class LLMClient:
             tools: Optional list of tool definitions for function calling.
             temperature: Optional override for model temperature.
             enable_thinking: If True and model supports thinking, enables
-                reasoning mode. Defaults to True.
+                reasoning mode and applies the configured effort. False skips the effort
+                override without changing the provider default. Defaults to True.
             max_tokens: Optional override for max output tokens. If None,
                 uses self.max_tokens (doubled when thinking is active).
             log_file: Optional path for API call logging.
@@ -609,11 +617,24 @@ class LLMClient:
             exponential backoff (max 60s between retries). Configurable
             retry count via llm_max_retries setting (DB default: 5).
         """
+        effort = None
+        if enable_thinking and getattr(self, 'reasoning_effort', None) is not None:
+            from models.db import db
+            try:
+                effort = db.validate_model_reasoning({
+                    'provider': self.provider, 'base_url': self.base_url,
+                    'api_format': self.api_format, 'model_name': self.model,
+                    'reasoning_effort': self.reasoning_effort,
+                })
+            except ReasoningEffortError as e:
+                return {'success': False, 'duration_ms': 0,
+                        'response': {'error': _format_llm_error('configuration_error')},
+                        'error_type': 'configuration_error', 'error_detail': str(e)}
         provider_messages = _normalize_system_messages(messages)
         if self.api_format == "codex":
             return self._codex_chat_completion(
                 provider_messages, tools, temperature, max_tokens, log_file,
-                tool_choice)
+                tool_choice, reasoning_effort=effort)
 
         is_ollama_fmt = self.api_format == "ollama" or (
             self.base_url and "ollama.com" in self.base_url
@@ -723,6 +744,7 @@ class LLMClient:
             self.model, processed_messages, max_tokens, effective_temperature,
             tools, tool_choice, oauth=anthropic_oauth,
         )
+        provider.apply_reasoning_effort(payload, effort)
 
         if is_anthropic:
             from backend.provider.claude_code import auth_headers
