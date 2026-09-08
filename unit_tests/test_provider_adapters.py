@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from backend.provider.anthropic_provider import AnthropicProvider
-from backend.provider.codex_provider import CODEX_CLIENT_VERSION, CodexProvider
+from backend.provider.openai_codex_provider import CODEX_CLIENT_VERSION, OpenAiCodexProvider
 from backend.provider.factory import get_provider
 from backend.provider.ollama_provider import OllamaProvider
 from backend.provider.openai_provider import OpenAIProvider
@@ -39,7 +39,7 @@ def test_provider_modules_import_in_a_fresh_process(reverse):
 
 @pytest.mark.parametrize("api_format,cls", [
     ("openai", OpenAIProvider), ("ollama", OllamaProvider),
-    ("anthropic", AnthropicProvider), ("codex", CodexProvider),
+    ("anthropic", AnthropicProvider), ("codex", OpenAiCodexProvider),
 ])
 def test_provider_preserves_messages_and_tool_choice(api_format, cls):
     provider = get_provider({"api_format": api_format})
@@ -96,7 +96,7 @@ def test_ollama_response_and_codex_discovery_keep_existing_formats():
     })
     assert result["choices"][0]["message"]["reasoning_content"] == "summary"
     assert result["usage"]["total_tokens"] == 6
-    codex = CodexProvider({})
+    codex = OpenAiCodexProvider({})
     assert codex.discovery_params() == {"client_version": CODEX_CLIENT_VERSION}
     models = codex.parse_models({"models": ["old-model", {"slug": "new-model", "extra": 1}]})
     assert [m["id"] for m in models] == ["old-model", "new-model"]

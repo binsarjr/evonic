@@ -4,7 +4,7 @@ from urllib.parse import urlsplit
 
 from backend.provider.anthropic_provider import AnthropicProvider
 from backend.provider.cerebras_provider import CerebrasProvider
-from backend.provider.codex_provider import CodexProvider
+from backend.provider.openai_codex_provider import OpenAiCodexProvider
 from backend.provider.deepseek_provider import DeepSeekProvider
 from backend.provider.ollama_provider import OllamaProvider
 from backend.provider.openai_provider import OpenAIProvider
@@ -14,7 +14,7 @@ def get_provider(config):
     """Select the adapter using the effective API format and endpoint."""
     api_format = config.get("api_format", "openai")
     if api_format == "codex":
-        cls = CodexProvider
+        cls = OpenAiCodexProvider
     elif api_format == "ollama" or "ollama.com" in (config.get("base_url") or ""):
         cls = OllamaProvider
     elif api_format == "anthropic":

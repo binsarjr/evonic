@@ -243,9 +243,9 @@ def api_test_model(model_id):
             token = get_valid_token(db, provider_id)
             if not token:
                 return jsonify({"success": False, "error": "Not connected. Complete OAuth flow first."})
-            from backend.provider.codex_client import CodexClient
+            from backend.provider.openai_codex_provider import OpenAiCodexProvider
             base_url = model.get("base_url") or "https://chatgpt.com/backend-api/codex"
-            client = CodexClient(token, base_url)
+            client = OpenAiCodexProvider({"access_token": token, "base_url": base_url})
             result = client.test_connection()
             return jsonify(result)
 

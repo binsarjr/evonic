@@ -87,14 +87,14 @@ def test_chat_completion_normalizes_messages_before_codex_dispatch():
     ]
     canonical = copy.deepcopy(messages)
     with patch("backend.provider.oauth_codex.get_valid_token", return_value="token"), \
-         patch("backend.provider.codex_client.CodexClient") as codex:
-        codex.return_value.send_request.return_value = {
+         patch("backend.provider.openai_codex_provider.OpenAiCodexProvider.send_request") as send:
+        send.return_value = {
             "success": True, "response": {"choices": [], "usage": {}},
         }
         result = client.chat_completion(messages)
 
     assert result["success"]
-    sent_messages = codex.return_value.send_request.call_args.kwargs["messages"]
+    sent_messages = send.call_args.kwargs["messages"]
     assert sent_messages == [
         {"role": "system", "content": "late"},
         {"role": "user", "content": "question"},

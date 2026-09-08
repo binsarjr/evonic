@@ -10,7 +10,7 @@ import pytest
 from backend.llm_client import LLMClient
 from backend.provider.factory import get_provider
 from backend.provider.reasoning_effort_error import ReasoningEffortError
-from backend.provider.codex_client import CodexClient
+from backend.provider.openai_codex_provider import OpenAiCodexProvider
 from models.db import db
 
 
@@ -128,7 +128,7 @@ def test_failed_or_empty_discovery_keeps_verified_support(client):
         'supported_reasoning_levels': [{'effort': 'high'}]}])
     before = db.get_provider(provider['id'])['model_capabilities']
     with patch('backend.provider.oauth_codex.get_valid_token', return_value='token'), \
-         patch('backend.provider.codex_provider.CodexProvider.fetch_models') as fetch:
+         patch('backend.provider.openai_codex_provider.OpenAiCodexProvider.fetch_models') as fetch:
         fetch.return_value = MagicMock(status_code=200)
         fetch.return_value.json.return_value = {'models': []}
         assert client.post('/api/providers/effort-test/fetch-models').json['success']
@@ -163,10 +163,10 @@ def test_invalid_runtime_effort_fails_before_network():
 
 
 def test_codex_effort_merges_summary_and_fast_mode():
-    client = CodexClient('token', 'https://chatgpt.com/backend-api/codex')
+    client = OpenAiCodexProvider({"access_token": 'token', "base_url": 'https://chatgpt.com/backend-api/codex'})
     response = MagicMock(status_code=200)
     response.json.return_value = {'output': [], 'usage': {}}
-    with patch('backend.provider.codex_client.httpx.post', return_value=response) as post:
+    with patch('backend.provider.openai_codex_provider.httpx.post', return_value=response) as post:
         client.send_request('gpt-5.6-luna', [{'role': 'user', 'content': 'hi'}],
                             stream=False, reasoning=True, reasoning_effort='high', service_tier='priority')
     payload = post.call_args.kwargs['json']
@@ -191,8 +191,8 @@ def test_anthropic_runtime_effort_without_native_thinking():
 
 
 def test_codex_stream_effort_merges_summary():
-    client = CodexClient('token', 'https://chatgpt.com/backend-api/codex')
-    with patch('backend.provider.codex_client.httpx.Client') as http:
+    client = OpenAiCodexProvider({"access_token": 'token', "base_url": 'https://chatgpt.com/backend-api/codex'})
+    with patch('backend.provider.openai_codex_provider.httpx.Client') as http:
         stream = http.return_value.__enter__.return_value.stream
         response = stream.return_value.__enter__.return_value
         response.status_code = 200
