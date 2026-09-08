@@ -1,9 +1,57 @@
 """Codex (Responses API) usage propagation — the context monitor depends on
 prompt_tokens > 0, and this path used to hardcode zeros (frozen meter)."""
 
+import json
 from unittest.mock import MagicMock, patch
 
-from backend.provider.codex_client import _map_usage
+from backend.provider.openai_codex_provider import _map_usage
+
+
+def test_legacy_codex_imports_and_constructors():
+    from backend.provider.codex_client import CodexClient, model_supports_fast_mode
+    from backend.provider.codex_provider import CodexProvider
+    from backend.provider.openai_codex_provider import OpenAiCodexProvider
+    from backend.provider.oauth_codex import CODEX_BASE_URL
+
+    assert CodexClient is CodexProvider is OpenAiCodexProvider
+    assert model_supports_fast_mode('gpt-5.6-luna')
+    for client in (CodexClient('token'), CodexClient(access_token='token'),
+                   CodexProvider({'access_token': 'token'})):
+        assert client.base_url == CODEX_BASE_URL.rstrip('/')
+        assert client._headers()['Authorization'] == 'Bearer token'
+    assert CodexClient('token', 'https://example.com/').base_url == 'https://example.com'
+
+
+def test_merged_codex_completion_refreshes_auth_and_records_stream_usage():
+    from backend.provider.factory import get_provider
+
+    provider = get_provider({'api_format': 'codex', 'provider': 'openai',
+                             'model_name': 'gpt-5.6-luna', 'thinking': True,
+                             'service_tier': 'priority'})
+    response = MagicMock(status_code=200)
+    response.iter_lines.side_effect = lambda: iter([
+        'data: ' + json.dumps({'type': 'response.output_text.delta', 'delta': 'ok'}),
+        'data: ' + json.dumps({'type': 'response.completed', 'response': {
+            'usage': {'input_tokens': 10, 'output_tokens': 2}}}),
+    ])
+    with patch('backend.provider.oauth_codex.get_valid_token',
+               side_effect=['first-token', 'refreshed-token']) as token, \
+         patch('backend.provider.openai_codex_provider.httpx.Client') as http, \
+         patch('backend.provider.openai_codex_provider.log_api_call'), \
+         patch('backend.llm_usage_events.record_llm_usage') as usage:
+        stream = http.return_value.__enter__.return_value.stream
+        stream.return_value.__enter__.return_value = response
+        for expected_token in ('first-token', 'refreshed-token'):
+            result = provider.chat_completion([{'role': 'user', 'content': 'hi'}])
+            assert result['success']
+            assert result['prompt_tokens'] == 10
+            assert result['completion_tokens'] == 2
+            request = stream.call_args.kwargs
+            assert request['headers']['Authorization'] == f'Bearer {expected_token}'
+            assert request['json']['reasoning'] == {'summary': 'auto'}
+            assert request['json']['service_tier'] == 'priority'
+        assert token.call_count == usage.call_count == 2
+        assert all(call.args[1] == 'openai' for call in token.call_args_list)
 
 
 def test_map_usage_responses_api_keys():
@@ -37,15 +85,14 @@ def test_codex_client_uses_default_model_provider_for_oauth():
         client = LLMClient()
 
     assert client.provider == 'openai'
-    assert client._codex_provider_id == 'openai'
 
     with patch('backend.provider.oauth_codex.get_valid_token', return_value='tok') as get_token, \
-         patch('backend.provider.codex_client.CodexClient') as codex_cls:
-        codex_cls.return_value.send_request.return_value = {
+         patch('backend.provider.openai_codex_provider.OpenAiCodexProvider.send_request') as send:
+        send.return_value = {
             'success': True,
             'response': {'choices': [{'message': {'content': 'ok'}}], 'usage': {}},
         }
-        client._codex_chat_completion([{'role': 'user', 'content': 'test'}])
+        client.chat_completion([{'role': 'user', 'content': 'test'}])
 
     get_token.assert_called_once()
     assert get_token.call_args.args[1] == 'openai'
@@ -63,7 +110,7 @@ def test_codex_chat_completion_propagates_usage():
     client.service_tier = 'priority'
     client.timeout = 120
     client.provider = 'codex'
-    client._codex_provider_id = 'codex'
+    client.api_format = 'codex'
 
     fake_result = {
         'success': True,
@@ -76,15 +123,13 @@ def test_codex_chat_completion_propagates_usage():
                       'total_tokens': 1290},
         },
     }
-    codex = MagicMock()
-    codex.send_request.return_value = fake_result
     messages = [{'role': 'user', 'content': 'halo'}]
     with patch('backend.provider.oauth_codex.get_valid_token',
                return_value='tok'), \
-         patch('backend.provider.codex_client.CodexClient',
-               return_value=codex), \
+         patch('backend.provider.openai_codex_provider.OpenAiCodexProvider.send_request',
+               return_value=fake_result) as send, \
          patch('backend.llm_usage_events.record_llm_usage') as record_usage:
-        result = client._codex_chat_completion(messages)
+        result = client.chat_completion(messages)
 
     assert result['success']
     assert result['prompt_tokens'] == 1234        # not hardcoded zero anymore
@@ -93,7 +138,7 @@ def test_codex_chat_completion_propagates_usage():
     # traces/archive get a request payload now (was None)
     assert result['request_payload']['model'] == 'gpt-5.6-terra'
     assert result['request_payload']['messages'][0]['content'] == 'halo'
-    assert codex.send_request.call_args.kwargs['service_tier'] == 'priority'
+    assert send.call_args.kwargs['service_tier'] == 'priority'
     record_usage.assert_called_once_with(
         model='gpt-5.6-terra',
         provider='codex',

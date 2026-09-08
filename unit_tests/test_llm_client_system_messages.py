@@ -86,17 +86,15 @@ def test_chat_completion_normalizes_messages_before_codex_dispatch():
         {"role": "assistant", "content": "answer"},
     ]
     canonical = copy.deepcopy(messages)
-    expected_result = {"success": True}
-
-    with patch.object(
-        client,
-        "_codex_chat_completion",
-        return_value=expected_result,
-    ) as send:
+    with patch("backend.provider.oauth_codex.get_valid_token", return_value="token"), \
+         patch("backend.provider.openai_codex_provider.OpenAiCodexProvider.send_request") as send:
+        send.return_value = {
+            "success": True, "response": {"choices": [], "usage": {}},
+        }
         result = client.chat_completion(messages)
 
-    assert result is expected_result
-    sent_messages = send.call_args.args[0]
+    assert result["success"]
+    sent_messages = send.call_args.kwargs["messages"]
     assert sent_messages == [
         {"role": "system", "content": "late"},
         {"role": "user", "content": "question"},
@@ -145,8 +143,8 @@ def test_openai_payload_sends_system_only_at_index_zero():
         },
     })()
 
-    with patch("backend.llm_client.requests.post", return_value=response) as post, \
-         patch("backend.llm_client.log_api_call"):
+    with patch("backend.provider.openai_provider.requests.post", return_value=response) as post, \
+         patch("backend.provider.openai_provider.log_api_call"):
         result = client.chat_completion(messages)
 
     sent_messages = post.call_args.kwargs["json"]["messages"]

@@ -16,7 +16,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-from backend.provider.codex_client import CodexClient
+from backend.provider.openai_codex_provider import OpenAiCodexProvider
 
 
 class _FakeStream:
@@ -56,9 +56,9 @@ class _FakeClient:
 
 def _send(events, **kwargs):
     """Run send_request against a canned SSE event list; returns (result, payload)."""
-    client = CodexClient("token", "https://chatgpt.com/backend-api/codex")
+    client = OpenAiCodexProvider({"access_token": "token", "base_url": "https://chatgpt.com/backend-api/codex"})
     fake = _FakeClient(_FakeStream(events))
-    with patch('backend.provider.codex_client.httpx.Client', return_value=fake):
+    with patch('backend.provider.openai_codex_provider.httpx.Client', return_value=fake):
         result = client.send_request(
             model=kwargs.pop('model', 'gpt-5-codex'),
             messages=kwargs.pop('messages', [{"role": "user", "content": "hi"}]),
@@ -162,8 +162,8 @@ def _blocking(data, status_code=200):
         def json(self):
             return data
 
-    client = CodexClient("token", "https://chatgpt.com/backend-api/codex")
-    with patch('backend.provider.codex_client.httpx.post', return_value=_Resp()):
+    client = OpenAiCodexProvider({"access_token": "token", "base_url": "https://chatgpt.com/backend-api/codex"})
+    with patch('backend.provider.openai_codex_provider.httpx.post', return_value=_Resp()):
         return client.send_request(
             model='gpt-5-codex',
             messages=[{"role": "user", "content": "hi"}],
@@ -200,7 +200,7 @@ def test_blocking_completed_response_still_succeeds():
 
 
 def test_assistant_text_is_kept_alongside_tool_calls():
-    converted = CodexClient._convert_messages([
+    converted = OpenAiCodexProvider._convert_messages([
         {"role": "assistant", "content": "Let me check that file.",
          "tool_calls": [{"id": "call_1", "type": "function",
                          "function": {"name": "read_file", "arguments": "{}"}}]},
@@ -211,12 +211,12 @@ def test_assistant_text_is_kept_alongside_tool_calls():
 
 
 def test_empty_assistant_message_is_dropped():
-    assert CodexClient._convert_messages([{"role": "assistant", "content": ""}]) == []
-    assert CodexClient._convert_messages([{"role": "assistant", "content": None}]) == []
+    assert OpenAiCodexProvider._convert_messages([{"role": "assistant", "content": ""}]) == []
+    assert OpenAiCodexProvider._convert_messages([{"role": "assistant", "content": None}]) == []
 
 
 def test_tool_result_keeps_its_call_id():
-    converted = CodexClient._convert_messages([
+    converted = OpenAiCodexProvider._convert_messages([
         {"role": "tool", "tool_call_id": "call_1", "content": "file body"},
     ])
     assert converted == [{"type": "function_call_output",
@@ -232,9 +232,9 @@ def test_max_output_tokens_not_sent_to_chatgpt_backend():
 
 
 def test_max_output_tokens_sent_to_standard_endpoint():
-    client = CodexClient("token", "https://api.openai.com/v1")
+    client = OpenAiCodexProvider({"access_token": "token", "base_url": "https://api.openai.com/v1"})
     fake = _FakeClient(_FakeStream(TEXT_EVENTS))
-    with patch('backend.provider.codex_client.httpx.Client', return_value=fake):
+    with patch('backend.provider.openai_codex_provider.httpx.Client', return_value=fake):
         client.send_request(model='gpt-5-codex',
                             messages=[{"role": "user", "content": "hi"}],
                             max_tokens=4096)
