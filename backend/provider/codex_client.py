@@ -12,7 +12,7 @@ from typing import Any, Dict, Generator, List, Optional
 
 import httpx
 
-from backend.provider.adapters import CODEX_CLIENT_VERSION, CodexProvider
+from backend.provider.codex_provider import CODEX_CLIENT_VERSION, CodexProvider
 from backend.provider.oauth_codex import CODEX_BASE_URL, extract_account_id
 
 _log = logging.getLogger(__name__)

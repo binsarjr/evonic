@@ -2,15 +2,39 @@
 
 import copy
 import json
+import ast
+import subprocess
+import sys
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from backend.provider.adapters import (
-    AnthropicProvider, CODEX_CLIENT_VERSION, CodexProvider, OllamaProvider,
-    OpenAIProvider, get_provider,
-)
+from backend.provider.anthropic_provider import AnthropicProvider
+from backend.provider.codex_provider import CODEX_CLIENT_VERSION, CodexProvider
+from backend.provider.factory import get_provider
+from backend.provider.ollama_provider import OllamaProvider
+from backend.provider.openai_provider import OpenAIProvider
 from backend.llm_client import LLMClient
+
+
+def test_provider_modules_define_at_most_one_class():
+    package = Path(__file__).resolve().parents[1] / 'backend/provider'
+    for path in package.glob('*.py'):
+        classes = [node.name for node in ast.walk(ast.parse(path.read_text()))
+                   if isinstance(node, ast.ClassDef)]
+        assert len(classes) <= 1, f'{path.name} defines multiple classes: {classes}'
+
+
+@pytest.mark.parametrize('reverse', [False, True])
+def test_provider_modules_import_in_a_fresh_process(reverse):
+    root = Path(__file__).resolve().parents[1]
+    modules = sorted(('backend.provider.' + path.stem
+                      for path in (root / 'backend/provider').glob('*.py')
+                      if path.stem != '__init__'), reverse=reverse)
+    subprocess.run([sys.executable, '-c',
+                    'import importlib, sys; [importlib.import_module(name) for name in sys.argv[1:]]',
+                    *modules], cwd=root, check=True, timeout=30)
 
 
 @pytest.mark.parametrize("api_format,cls", [
@@ -171,8 +195,8 @@ def test_shared_retry_path_uses_provider_error_classification(api_format, first,
     client.max_retries = 1
     response = MagicMock(status_code=200)
     response.json.side_effect = [first, success]
-    with patch('backend.provider.adapters.requests.post', return_value=response) as post, \
-         patch('backend.provider.adapters.time.sleep') as sleep, \
+    with patch('backend.provider.openai_provider.requests.post', return_value=response) as post, \
+         patch('backend.provider.openai_provider.time.sleep') as sleep, \
          patch('backend.llm_usage_events.record_llm_usage') as usage:
         result = client.chat_completion([{'role': 'user', 'content': 'hi'}])
     assert result['success']
@@ -198,7 +222,7 @@ def test_anthropic_credential_source_is_shared_by_completion_and_discovery(overr
     with patch('backend.provider.claude_code.resolve_credential',
                return_value=('sk-ant-oat-token', True)) as resolve, \
          patch('backend.provider.claude_code.claude_code_version', return_value='1.0.0'), \
-         patch('backend.provider.adapters.requests.post', return_value=response) as post, \
+         patch('backend.provider.openai_provider.requests.post', return_value=response) as post, \
          patch('backend.provider.base.requests.get', return_value=catalog) as get:
         assert client.chat_completion([{'role': 'user', 'content': 'hi'}])['success']
         assert client.test_connection()['available_models'] == 1

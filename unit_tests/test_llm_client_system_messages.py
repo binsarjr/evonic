@@ -143,8 +143,8 @@ def test_openai_payload_sends_system_only_at_index_zero():
         },
     })()
 
-    with patch("backend.provider.adapters.requests.post", return_value=response) as post, \
-         patch("backend.provider.adapters.log_api_call"):
+    with patch("backend.provider.openai_provider.requests.post", return_value=response) as post, \
+         patch("backend.provider.openai_provider.log_api_call"):
         result = client.chat_completion(messages)
 
     sent_messages = post.call_args.kwargs["json"]["messages"]

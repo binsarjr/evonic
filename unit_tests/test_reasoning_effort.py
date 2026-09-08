@@ -8,8 +8,8 @@ import subprocess
 import pytest
 
 from backend.llm_client import LLMClient
-from backend.provider.adapters import get_provider
-from backend.provider.base import ReasoningEffortError
+from backend.provider.factory import get_provider
+from backend.provider.reasoning_effort_error import ReasoningEffortError
 from backend.provider.codex_client import CodexClient
 from models.db import db
 
@@ -128,7 +128,7 @@ def test_failed_or_empty_discovery_keeps_verified_support(client):
         'supported_reasoning_levels': [{'effort': 'high'}]}])
     before = db.get_provider(provider['id'])['model_capabilities']
     with patch('backend.provider.oauth_codex.get_valid_token', return_value='token'), \
-         patch('backend.provider.adapters.CodexProvider.fetch_models') as fetch:
+         patch('backend.provider.codex_provider.CodexProvider.fetch_models') as fetch:
         fetch.return_value = MagicMock(status_code=200)
         fetch.return_value.json.return_value = {'models': []}
         assert client.post('/api/providers/effort-test/fetch-models').json['success']
@@ -144,7 +144,7 @@ def test_runtime_effort_is_independent_of_legacy_thinking(effort, enable, expect
     response = MagicMock(status_code=200)
     response.json.return_value = {'choices': [{'message': {'role': 'assistant', 'content': 'ok'},
                                               'finish_reason': 'stop'}], 'usage': {}}
-    with patch('backend.provider.adapters.requests.post', return_value=response) as post:
+    with patch('backend.provider.openai_provider.requests.post', return_value=response) as post:
         result = client.chat_completion([{'role': 'user', 'content': 'hi'}], enable_thinking=enable)
     assert result['success'], result
     payload = post.call_args.kwargs['json']
@@ -156,7 +156,7 @@ def test_runtime_effort_is_independent_of_legacy_thinking(effort, enable, expect
 def test_invalid_runtime_effort_fails_before_network():
     _provider()
     client = LLMClient(_model(reasoning_effort='ultra'))
-    with patch('backend.provider.adapters.requests.post') as post:
+    with patch('backend.provider.openai_provider.requests.post') as post:
         result = client.chat_completion([{'role': 'user', 'content': 'hi'}])
     assert result['error_type'] == 'configuration_error'
     post.assert_not_called()
@@ -183,7 +183,7 @@ def test_anthropic_runtime_effort_without_native_thinking():
     response = MagicMock(status_code=200)
     response.json.return_value = {'content': [{'type': 'text', 'text': 'ok'}],
                                   'stop_reason': 'end_turn', 'usage': {}}
-    with patch('backend.provider.adapters.requests.post', return_value=response) as post:
+    with patch('backend.provider.openai_provider.requests.post', return_value=response) as post:
         assert client.chat_completion([{'role': 'user', 'content': 'hi'}])['success']
     payload = post.call_args.kwargs['json']
     assert payload['output_config'] == {'effort': 'high'}

@@ -196,3 +196,73 @@ def strip_thinking_tags(content: str) -> Tuple[str, Optional[str]]:
     return cleaned, thinking_content
 
 
+def _convert_multimodal_to_claude(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Convert OpenAI-style multimodal content blocks to Anthropic format.
+
+    Handles image_url, input_audio, and video_url content types.
+    """
+    result = []
+    for msg in messages:
+        content = msg.get("content")
+        if not isinstance(content, list):
+            result.append(msg)
+            continue
+        new_parts = []
+        for part in content:
+            if not isinstance(part, dict):
+                new_parts.append(part)
+                continue
+            ptype = part.get("type")
+            if ptype == "image_url":
+                url = (part.get("image_url") or {}).get("url", "")
+                if url.startswith("data:"):
+                    try:
+                        header, b64data = url.split(",", 1)
+                        media_type = header.split(":")[1].split(";")[0]
+                    except (ValueError, IndexError):
+                        media_type, b64data = "image/jpeg", url
+                    new_parts.append({
+                        "type": "image",
+                        "source": {"type": "base64", "media_type": media_type, "data": b64data},
+                    })
+                else:
+                    new_parts.append({
+                        "type": "image",
+                        "source": {"type": "url", "url": url},
+                    })
+            elif ptype == "input_audio":
+                # Convert to Claude audio format if supported; otherwise pass through
+                audio_info = part.get("input_audio") or {}
+                b64data = audio_info.get("data", "")
+                fmt = audio_info.get("format", "wav")
+                # Map format to MIME type for Claude
+                fmt_to_mime = {"wav": "audio/wav", "mp3": "audio/mpeg", "ogg": "audio/ogg",
+                               "mpeg": "audio/mpeg", "webm": "audio/webm"}
+                media_type = fmt_to_mime.get(fmt, f"audio/{fmt}")
+                new_parts.append({
+                    "type": "audio",
+                    "source": {"type": "base64", "media_type": media_type, "data": b64data},
+                })
+            elif ptype == "video_url":
+                # Convert video data URL to Claude format; pass through external URLs
+                url = (part.get("video_url") or {}).get("url", "")
+                if url.startswith("data:"):
+                    try:
+                        header, b64data = url.split(",", 1)
+                        media_type = header.split(":")[1].split(";")[0]
+                    except (ValueError, IndexError):
+                        media_type, b64data = "video/mp4", url
+                    new_parts.append({
+                        "type": "video",
+                        "source": {"type": "base64", "media_type": media_type, "data": b64data},
+                    })
+                else:
+                    new_parts.append({
+                        "type": "video",
+                        "source": {"type": "url", "url": url},
+                    })
+            else:
+                new_parts.append(part)
+        result.append({**msg, "content": new_parts})
+    return result
+

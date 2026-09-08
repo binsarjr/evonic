@@ -6,7 +6,7 @@ import requests
 from flask import Blueprint, jsonify, request
 
 from models.db import db
-from backend.provider.base import ReasoningEffortError
+from backend.provider.reasoning_effort_error import ReasoningEffortError
 
 _logger = logging.getLogger(__name__)
 

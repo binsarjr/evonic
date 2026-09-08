@@ -10,8 +10,8 @@ import json
 import re
 from typing import Any, Dict, List, Optional
 
-from backend.provider.adapters import get_provider
-from backend.provider.base import ReasoningEffortError
+from backend.provider.factory import get_provider
+from backend.provider.reasoning_effort_error import ReasoningEffortError
 
 from backend.provider.common import (
     _format_llm_error, _normalize_system_messages, _split_trailing_think_close,

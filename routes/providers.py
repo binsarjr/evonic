@@ -5,8 +5,9 @@ import httpx
 from flask import Blueprint, jsonify, request
 
 from models.db import db
-from backend.provider.adapters import get_provider
-from backend.provider.base import ProviderAuthError, ReasoningEffortError
+from backend.provider.factory import get_provider
+from backend.provider.provider_auth_error import ProviderAuthError
+from backend.provider.reasoning_effort_error import ReasoningEffortError
 
 providers_bp = Blueprint("providers", __name__)
 

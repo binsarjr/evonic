@@ -120,7 +120,7 @@ class ProvidersMixin:
 
     def save_provider_model_capabilities(self, provider, discovered) -> None:
         """Store only normalized capabilities, bound to the discovery endpoint."""
-        from backend.provider.adapters import get_provider
+        from backend.provider.factory import get_provider
         adapter = get_provider(provider)
         snapshot = {
             'base_url': adapter.base_url,
@@ -139,8 +139,8 @@ class ProvidersMixin:
 
     def get_model_reasoning_capabilities(self, model, provider=None):
         """Resolve support for the effective model, never a gateway's model name alone."""
-        from backend.provider.adapters import get_provider
-        from backend.provider.base import reasoning_capabilities
+        from backend.provider.factory import get_provider
+        from backend.provider.reasoning_capabilities import reasoning_capabilities
         provider = provider or self.get_provider(model.get('provider', ''))
         resolved = self.resolve_model_config(model, provider)
         adapter = get_provider(resolved)
@@ -158,7 +158,7 @@ class ProvidersMixin:
         return adapter.get_reasoning_capabilities(resolved.get('model_name'))
 
     def validate_model_reasoning(self, model):
-        from backend.provider.base import validate_reasoning_effort
+        from backend.provider.reasoning_capabilities import validate_reasoning_effort
         effort = model.get('reasoning_effort')
         if effort is None or effort == '':
             return None
