@@ -144,7 +144,7 @@ def test_runtime_effort_is_independent_of_legacy_thinking(effort, enable, expect
     response = MagicMock(status_code=200)
     response.json.return_value = {'choices': [{'message': {'role': 'assistant', 'content': 'ok'},
                                               'finish_reason': 'stop'}], 'usage': {}}
-    with patch('backend.llm_client.requests.post', return_value=response) as post:
+    with patch('backend.provider.adapters.requests.post', return_value=response) as post:
         result = client.chat_completion([{'role': 'user', 'content': 'hi'}], enable_thinking=enable)
     assert result['success'], result
     payload = post.call_args.kwargs['json']
@@ -156,7 +156,7 @@ def test_runtime_effort_is_independent_of_legacy_thinking(effort, enable, expect
 def test_invalid_runtime_effort_fails_before_network():
     _provider()
     client = LLMClient(_model(reasoning_effort='ultra'))
-    with patch('backend.llm_client.requests.post') as post:
+    with patch('backend.provider.adapters.requests.post') as post:
         result = client.chat_completion([{'role': 'user', 'content': 'hi'}])
     assert result['error_type'] == 'configuration_error'
     post.assert_not_called()
@@ -183,7 +183,7 @@ def test_anthropic_runtime_effort_without_native_thinking():
     response = MagicMock(status_code=200)
     response.json.return_value = {'content': [{'type': 'text', 'text': 'ok'}],
                                   'stop_reason': 'end_turn', 'usage': {}}
-    with patch('backend.llm_client.requests.post', return_value=response) as post:
+    with patch('backend.provider.adapters.requests.post', return_value=response) as post:
         assert client.chat_completion([{'role': 'user', 'content': 'hi'}])['success']
     payload = post.call_args.kwargs['json']
     assert payload['output_config'] == {'effort': 'high'}

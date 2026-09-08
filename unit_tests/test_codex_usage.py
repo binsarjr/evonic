@@ -37,7 +37,6 @@ def test_codex_client_uses_default_model_provider_for_oauth():
         client = LLMClient()
 
     assert client.provider == 'openai'
-    assert client._codex_provider_id == 'openai'
 
     with patch('backend.provider.oauth_codex.get_valid_token', return_value='tok') as get_token, \
          patch('backend.provider.codex_client.CodexClient') as codex_cls:
@@ -45,7 +44,7 @@ def test_codex_client_uses_default_model_provider_for_oauth():
             'success': True,
             'response': {'choices': [{'message': {'content': 'ok'}}], 'usage': {}},
         }
-        client._codex_chat_completion([{'role': 'user', 'content': 'test'}])
+        client.chat_completion([{'role': 'user', 'content': 'test'}])
 
     get_token.assert_called_once()
     assert get_token.call_args.args[1] == 'openai'
@@ -63,7 +62,7 @@ def test_codex_chat_completion_propagates_usage():
     client.service_tier = 'priority'
     client.timeout = 120
     client.provider = 'codex'
-    client._codex_provider_id = 'codex'
+    client.api_format = 'codex'
 
     fake_result = {
         'success': True,
@@ -84,7 +83,7 @@ def test_codex_chat_completion_propagates_usage():
          patch('backend.provider.codex_client.CodexClient',
                return_value=codex), \
          patch('backend.llm_usage_events.record_llm_usage') as record_usage:
-        result = client._codex_chat_completion(messages)
+        result = client.chat_completion(messages)
 
     assert result['success']
     assert result['prompt_tokens'] == 1234        # not hardcoded zero anymore

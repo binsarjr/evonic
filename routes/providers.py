@@ -6,7 +6,7 @@ from flask import Blueprint, jsonify, request
 
 from models.db import db
 from backend.provider.adapters import get_provider
-from backend.provider.base import ReasoningEffortError
+from backend.provider.base import ProviderAuthError, ReasoningEffortError
 
 providers_bp = Blueprint("providers", __name__)
 
@@ -105,29 +105,10 @@ def api_fetch_provider_models(provider_id):
     if not base_url:
         return jsonify({"success": False, "error": "Provider has no base_url configured"}), 400
 
-    api_format = provider.get("api_format", "openai")
     adapter = get_provider(provider)
 
-    headers = {"Content-Type": "application/json"}
-    if api_format == "codex":
-        from backend.provider.oauth_codex import get_valid_token
-        token = get_valid_token(db, provider_id)
-        if not token:
-            return jsonify({"success": False, "error": "Not connected. Click Connect first."}), 401
-        headers["Authorization"] = f"Bearer {token}"
-    elif api_format == "anthropic":
-        from backend.provider.claude_code import auth_headers, resolve_credential
-        token, oauth = resolve_credential(db, provider_id)
-        if not token:
-            return jsonify({"success": False, "error": "Not connected. Set up credentials first."}), 401
-        headers = auth_headers(token, oauth)
-    else:
-        api_key = provider.get("api_key")
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
-
     try:
-        resp = adapter.fetch_models(headers, timeout=15)
+        resp = adapter.fetch_models(timeout=15)
         if resp.status_code != 200:
             return jsonify({
                 "success": False,
@@ -151,6 +132,8 @@ def api_fetch_provider_models(provider_id):
 
         return jsonify({"success": True, "models": models, "total": len(models)})
 
+    except ProviderAuthError as e:
+        return jsonify({"success": False, "error": str(e)}), 401
     except (requests.exceptions.Timeout, httpx.TimeoutException):
         return jsonify({"success": False, "error": "Connection timed out"}), 408
     except (requests.exceptions.ConnectionError, httpx.ConnectError) as e:
@@ -194,37 +177,14 @@ def api_test_provider(provider_id):
     if not base_url:
         return jsonify({"success": False, "error": "Provider has no base_url configured"}), 400
 
-    api_format = provider.get("api_format", "openai")
     adapter = get_provider(provider)
 
-    headers = {}
-    if api_format == "codex":
-        from backend.provider.oauth_codex import get_valid_token
-        token = get_valid_token(db, provider_id)
-        if not token:
-            return jsonify({"success": False, "error": "Not connected. Click Connect first."}), 401
-        headers["Authorization"] = f"Bearer {token}"
-    elif api_format == "anthropic":
-        from backend.provider.claude_code import auth_headers, resolve_credential
-        token, oauth = resolve_credential(db, provider_id)
-        if not token:
-            return jsonify({"success": False, "error": "Not connected. Set up credentials first."}), 401
-        headers = auth_headers(token, oauth)
-    else:
-        api_key = provider.get("api_key")
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
-
     try:
-        resp = adapter.fetch_models(headers, timeout=10)
+        resp = adapter.fetch_models(timeout=10)
         if resp.status_code == 200:
             try:
                 data = resp.json()
-                if api_format == "ollama":
-                    models = data.get("models", [])
-                else:
-                    models = data.get("data", data.get("models", []))
-                count = len(models) if isinstance(models, list) else "?"
+                count = len(adapter.parse_models(data))
             except Exception:
                 count = "?"
             return jsonify({"success": True, "message": f"Connected ({count} models available)"})
@@ -234,6 +194,8 @@ def api_test_provider(provider_id):
                 "error": f"HTTP {resp.status_code}: {resp.text[:200]}",
                 "status_code": resp.status_code,
             })
+    except ProviderAuthError as e:
+        return jsonify({"success": False, "error": str(e)}), 401
     except (requests.exceptions.Timeout, httpx.TimeoutException):
         return jsonify({"success": False, "error": "Connection timed out"}), 408
     except (requests.exceptions.ConnectionError, httpx.ConnectError) as e:
