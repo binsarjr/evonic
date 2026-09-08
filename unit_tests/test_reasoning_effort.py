@@ -36,41 +36,6 @@ def _model(**extra):
             'name': 'Effort model', 'type': 'remote', **extra}
 
 
-def test_metadata_is_per_model_and_endpoint_bound():
-    provider = _provider('codex', 'https://chatgpt.com/backend-api/codex')
-    db.save_provider_model_capabilities(provider, [{
-        'id': 'one', 'supported_reasoning_levels': [{'effort': 'low'}, {'effort': 'ultra'}],
-        'default_reasoning_level': 'low',
-    }, {'id': 'two', 'supported_reasoning_levels': [{'effort': 'high'}]}])
-    assert db.get_model_reasoning_capabilities(_model(model_name='one')) == {
-        'efforts': ['low', 'ultra'], 'default_effort': 'low', 'manual': False,
-    }
-    assert db.get_model_reasoning_capabilities(_model(model_name='two'))['efforts'] == ['high']
-    assert db.get_model_reasoning_capabilities(_model(model_name='unknown'))['efforts'] == []
-    assert db.get_model_reasoning_capabilities(_model(model_name='one',
-        base_url='https://gateway.example/v1'))['efforts'] == []
-    db.update_provider(provider['id'], {'base_url': 'https://chatgpt.com/other'})
-    assert db.get_model_reasoning_capabilities(_model(model_name='one'))['efforts'] == []
-    # An old, in-flight discovery response cannot restore support at the new endpoint.
-    db.save_provider_model_capabilities(provider, [{'id': 'one'}])
-    assert db.get_provider(provider['id'])['model_capabilities'] == '{}'
-
-
-def test_anthropic_uses_advertised_levels_only():
-    provider = {'api_format': 'anthropic', 'base_url': 'https://api.anthropic.com/v1', 'model_name': 'claude'}
-    metadata = {'capabilities': {'effort': {'supported': True, 'low': {'supported': True},
-                'high': {'supported': True}, 'max': {'supported': False}}}}
-    assert model_reasoning_capabilities(provider, metadata) == {
-        'efforts': ['low', 'high'], 'default_effort': 'high', 'manual': False,
-    }
-    assert model_reasoning_capabilities(provider)['efforts'] == []
-    payload = {'output_config': {'format': {'type': 'json_schema'}}}
-    apply_reasoning_effort(payload, provider, 'high')
-    assert payload['output_config']['effort'] == 'high'
-    assert 'format' in payload['output_config']
-    assert 'thinking' not in payload
-
-
 @pytest.mark.parametrize('url,api_format', [
     ('https://openrouter.ai/api/v1', 'openai'),
     ('https://generativelanguage.googleapis.com/v1beta/openai', 'openai'),
@@ -109,62 +74,6 @@ def test_model_routes_preserve_effort_and_reject_invalid_updates(client):
     assert len(db.get_llm_models()) == len(rows)
     assert client.put('/api/models/' + mid, json={'reasoning_effort': None}).status_code == 200
     assert db.get_model_by_id(mid)['reasoning_effort'] is None
-
-
-def test_capability_endpoint_uses_effective_config(client):
-    _provider()
-    url = '/api/providers/effort-test/reasoning-capabilities'
-    result = client.get(url, query_string={'model_name': 'deepseek-v4-pro'}).json
-    assert result['can_refresh'] is True
-    assert result['reasoning_capabilities']['efforts'] == ['low', 'high', 'max']
-    result = client.get(url, query_string={'model_name': 'deepseek-v4-pro',
-                                          'base_url': 'https://openrouter.ai/api/v1'}).json
-    assert result['reasoning_supported'] is False
-    assert result['reasoning_capabilities']['efforts'] == []
-
-
-@pytest.mark.parametrize('model,last,default', [
-    ('gpt-6-astra', 'ultra', 'medium'),
-    ('gpt-5.6-sol', 'ultra', 'low'),
-    ('gpt-5.6-terra', 'ultra', 'medium'),
-    ('gpt-5.6-luna', 'max', 'medium'),
-])
-def test_codex_edit_has_defaults_before_discovery(client, model, last, default):
-    provider = _provider('codex', 'https://chatgpt.com/backend-api/codex')
-    url = '/api/providers/effort-test/reasoning-capabilities'
-    query = {'model_name': model, 'api_format': 'codex'}
-    result = client.get(url, query_string=query).json['reasoning_capabilities']
-    assert result['efforts'][-1] == last
-    assert result['default_effort'] == default
-    assert db.validate_model_reasoning(_model(model_name=model, reasoning_effort=last)) == last
-    # Empty snapshots saved before built-in support must not mask the defaults.
-    snapshot = {'base_url': provider['base_url'], 'api_format': 'codex',
-                'models': {model: {'efforts': [], 'default_effort': None}}}
-    with db._connect() as conn:
-        conn.execute('UPDATE providers SET model_capabilities = ? WHERE id = ?',
-                     (json.dumps(snapshot), provider['id']))
-        conn.commit()
-    assert client.get(url, query_string=query).json['reasoning_capabilities'] == result
-    db.save_provider_model_capabilities(provider, [{'id': model,
-        'supported_reasoning_levels': [{'effort': 'high'}], 'default_reasoning_level': 'high'}])
-    assert client.get(url, query_string=query).json['reasoning_capabilities']['efforts'] == ['high']
-    assert client.get(url, query_string={**query, 'base_url': 'https://gateway.example/v1'}).json[
-        'reasoning_capabilities']['efforts'] == []
-
-
-def test_failed_or_empty_discovery_keeps_verified_support(client):
-    provider = _provider('codex', 'https://chatgpt.com/backend-api/codex')
-    db.save_provider_model_capabilities(provider, [{'id': 'model',
-        'supported_reasoning_levels': [{'effort': 'high'}]}])
-    before = db.get_provider(provider['id'])['model_capabilities']
-    with patch('backend.provider.oauth_codex.get_valid_token', return_value='token'), \
-         patch('httpx.get') as fetch:
-        fetch.return_value = MagicMock(status_code=200)
-        fetch.return_value.json.return_value = {'models': []}
-        assert client.post('/api/providers/effort-test/fetch-models').json['success']
-        fetch.return_value = MagicMock(status_code=503, text='unavailable')
-        assert not client.post('/api/providers/effort-test/fetch-models').json['success']
-    assert db.get_provider(provider['id'])['model_capabilities'] == before
 
 
 @pytest.mark.parametrize('effort,enable,expected', [('max', True, 'max'), ('max', False, 'max'), (None, True, None), (None, False, None)])
@@ -208,10 +117,7 @@ def test_codex_effort_merges_summary_and_fast_mode():
 @pytest.mark.parametrize('enable', [True, False])
 def test_anthropic_runtime_effort_without_native_thinking(enable):
     provider = _provider('anthropic', 'https://api.anthropic.com/v1')
-    db.save_provider_model_capabilities(provider, [{'id': 'claude', 'capabilities': {
-        'effort': {'supported': True, 'high': {'supported': True}},
-    }}])
-    client = LLMClient(_model(model_name='claude', reasoning_effort='high', thinking=False))
+    client = LLMClient(_model(model_name='claude-opus-4-6', reasoning_effort='high', thinking=False))
     response = MagicMock(status_code=200)
     response.json.return_value = {'content': [{'type': 'text', 'text': 'ok'}],
                                   'stop_reason': 'end_turn', 'usage': {}}
@@ -268,29 +174,19 @@ def test_unidentified_model_accepts_manual_effort(client, api_format, url, field
     assert db.get_model_reasoning_capabilities({**model, 'base_url': 'https://gateway.example'})['manual']
 
 
-def test_explicitly_unsupported_metadata_disables_manual_effort():
-    provider = _provider('anthropic', 'https://api.anthropic.com/v1')
-    db.save_provider_model_capabilities(provider, [{'id': 'no-reasoning',
-        'capabilities': {'effort': {'supported': False}}}])
-    model = _model(model_name='no-reasoning', reasoning_effort='high')
-    assert db.get_model_reasoning_capabilities(model)['manual'] is False
-    with pytest.raises(ReasoningEffortError):
-        db.validate_model_reasoning(model)
-
-
 @pytest.mark.parametrize('model', ['gpt-6-astra', 'deepseek-v4-pro'])
 def test_cavoti_uses_manual_effort_despite_model_name_and_cached_levels(client, model):
     provider = _provider('openai', 'https://cavoti.com/v1')
     snapshot = {'base_url': provider['base_url'], 'api_format': 'openai',
                 'models': {model: {'efforts': ['low'], 'default_effort': 'low', 'manual': False}}}
     with db._connect() as conn:
+        if 'model_capabilities' not in [row[1] for row in conn.execute('PRAGMA table_info(providers)')]:
+            conn.execute("ALTER TABLE providers ADD COLUMN model_capabilities TEXT DEFAULT '{}'")
         conn.execute('UPDATE providers SET model_capabilities = ? WHERE id = ?',
                      (json.dumps(snapshot), provider['id']))
         conn.commit()
-    query = {'model_name': model}
-    result = client.get('/api/providers/effort-test/reasoning-capabilities', query_string=query).json
-    assert result['reasoning_capabilities'] == {'efforts': [], 'default_effort': None, 'manual': True}
-    assert not result['can_refresh']
+    assert db.get_model_reasoning_capabilities(_model(model_name=model)) == {
+        'efforts': [], 'default_effort': None, 'manual': True}
     created = client.post('/api/models', json=_model(model_name=model, reasoning_effort='custom_level'))
     assert created.status_code == 200
     mid = created.json['model_id']
@@ -343,3 +239,46 @@ def test_codex_effort_is_forwarded_when_thinking_disabled():
         assert llm.chat_completion([{'role': 'user', 'content': 'hi'}], enable_thinking=False)['success']
     assert send.call_args.kwargs['reasoning_effort'] == 'high'
     assert send.call_args.kwargs['reasoning'] is False
+
+
+@pytest.mark.parametrize('model,efforts', [
+    ('gpt-6-astra', ['low', 'medium', 'high', 'xhigh', 'max']),
+    ('gpt-5.6-sol', ['low', 'medium', 'high', 'xhigh', 'max']),
+    ('gpt-5.6-terra', ['low', 'medium', 'high', 'xhigh', 'max']),
+    ('gpt-5.6-luna', ['low', 'medium', 'high', 'xhigh', 'max']),
+    ('gpt-5.5', ['low', 'medium', 'high', 'xhigh']),
+])
+def test_codex_api_levels_ignore_old_harness_metadata(client, model, efforts):
+    provider = _provider('codex', 'https://chatgpt.com/backend-api/codex')
+    with db._connect() as conn:
+        if 'model_capabilities' not in [row[1] for row in conn.execute('PRAGMA table_info(providers)')]:
+            conn.execute("ALTER TABLE providers ADD COLUMN model_capabilities TEXT DEFAULT '{}'")
+        conn.execute('UPDATE providers SET model_capabilities = ? WHERE id = ?',
+                     (json.dumps({'models': {model: {'efforts': ['ultra']}}}), provider['id']))
+        conn.commit()
+    with patch('requests.get') as requests_get, patch('httpx.get') as httpx_get:
+        catalog = client.get('/api/providers').json['reasoning_catalog']
+        assert catalog['codex']['models'][model]['efforts'] == efforts
+        assert db.get_model_reasoning_capabilities(_model(model_name=model))['efforts'] == efforts
+        requests_get.assert_not_called()
+        httpx_get.assert_not_called()
+    assert client.post('/api/models', json=_model(model_name=model, reasoning_effort='ultra')).status_code == 400
+    assert client.post('/api/models', json=_model(model_name=model, reasoning_effort='high')).status_code == 200
+
+
+@pytest.mark.parametrize('model,efforts', [
+    ('claude-opus-4-5', ['low', 'medium', 'high']),
+    ('claude-opus-4-6', ['low', 'medium', 'high', 'max']),
+    ('claude-sonnet-4-6', ['low', 'medium', 'high', 'max']),
+    ('claude-opus-4-7', ['low', 'medium', 'high', 'xhigh', 'max']),
+])
+def test_anthropic_levels_are_model_specific(model, efforts):
+    config = {'base_url': 'https://api.anthropic.com/v1', 'api_format': 'anthropic', 'model_name': model}
+    assert model_reasoning_capabilities(config)['efforts'] == efforts
+    assert model_reasoning_capabilities({**config, 'base_url': 'https://cavoti.com/v1'})['manual']
+
+
+def test_spark_without_api_documentation_is_manual():
+    config = {'base_url': 'https://chatgpt.com/backend-api/codex', 'api_format': 'codex',
+              'model_name': 'gpt-5.3-codex-spark'}
+    assert model_reasoning_capabilities(config)['manual']

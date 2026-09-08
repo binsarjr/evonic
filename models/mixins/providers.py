@@ -1,4 +1,3 @@
-import json
 import sqlite3
 from typing import Dict, Any, List, Optional
 
@@ -16,7 +15,7 @@ class ProvidersMixin:
             cursor.execute(
                 "SELECT id, name, type, base_url, api_key, api_format, enabled, "
                 "auth_type, refresh_token, token_expires_at, credential_source, "
-                "created_at, updated_at, model_capabilities FROM providers ORDER BY name"
+                "created_at, updated_at FROM providers ORDER BY name"
             )
             return [dict(row) for row in cursor.fetchall()]
 
@@ -27,7 +26,7 @@ class ProvidersMixin:
             cursor.execute(
                 "SELECT id, name, type, base_url, api_key, api_format, enabled, "
                 "auth_type, refresh_token, token_expires_at, credential_source, "
-                "created_at, updated_at, model_capabilities FROM providers WHERE id = ?",
+                "created_at, updated_at FROM providers WHERE id = ?",
                 (provider_id,),
             )
             row = cursor.fetchone()
@@ -61,10 +60,6 @@ class ProvidersMixin:
         updates = {k: v for k, v in data.items() if k in allowed}
         if not updates:
             return False
-        current = self.get_provider(provider_id)
-        if current and any(key in updates and updates[key] != current.get(key)
-                           for key in ('base_url', 'api_format')):
-            updates['model_capabilities'] = '{}'
         set_clause = ", ".join(f"{k} = ?" for k in updates)
         values = list(updates.values()) + [provider_id]
         with self._connect() as conn:
@@ -118,44 +113,10 @@ class ProvidersMixin:
                 result["api_format"] = pf
         return result
 
-    def save_provider_model_capabilities(self, provider, discovered) -> None:
-        """Store only normalized capabilities, bound to the discovery endpoint."""
-        from backend.reasoning_capabilities import model_reasoning_capabilities
-        snapshot = {
-            'base_url': (provider.get('base_url') or '').rstrip('/'),
-            'api_format': provider.get('api_format', 'openai'),
-            'models': {m['id']: model_reasoning_capabilities({**provider, 'model_name': m['id']}, m)
-                       for m in discovered},
-        }
-        with self._connect() as conn:
-            conn.execute(
-                "UPDATE providers SET model_capabilities = ? "
-                "WHERE id = ? AND COALESCE(base_url, '') = ? AND api_format = ?",
-                (json.dumps(snapshot), provider['id'], provider.get('base_url') or '',
-                 provider.get('api_format', 'openai')),
-            )
-            conn.commit()
-
     def get_model_reasoning_capabilities(self, model, provider=None):
-        """Resolve support for the effective model, never a gateway's model name alone."""
-        from backend.reasoning_capabilities import model_reasoning_capabilities, reasoning_format
-        from backend.reasoning_capabilities import reasoning_capabilities
-        provider = provider or self.get_provider(model.get('provider', ''))
-        resolved = self.resolve_model_config(model, provider)
-        if not reasoning_format(resolved):
-            # Gateway names and cached metadata cannot establish automatic support.
-            return model_reasoning_capabilities(resolved)
-        try:
-            snapshot = json.loads((provider or {}).get('model_capabilities') or '{}')
-        except (TypeError, ValueError):
-            snapshot = {}
-        if (snapshot.get('base_url') == (resolved.get('base_url') or '').rstrip('/')
-                and snapshot.get('api_format') == resolved.get('api_format', 'openai')):
-            cached = snapshot.get('models', {}).get(resolved.get('model_name'))
-            if isinstance(cached, dict) and (cached.get('efforts') or 'manual' in cached):
-                return reasoning_capabilities(cached.get('efforts', []), cached.get('default_effort'),
-                                              cached.get('manual', False))
-        return model_reasoning_capabilities(resolved)
+        """Use the static catalog for the effective endpoint and model."""
+        from backend.reasoning_capabilities import model_reasoning_capabilities
+        return model_reasoning_capabilities(self.resolve_model_config(model, provider))
 
     def validate_model_reasoning(self, model):
         from backend.reasoning_capabilities import validate_reasoning_effort

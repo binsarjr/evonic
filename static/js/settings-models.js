@@ -5,6 +5,7 @@
 window.settingsModels = {
     models: [],
     providers: [],
+    reasoningCatalog: {},
     searchQuery: "",
     _currentTestModelId: null,
     _fetchProviderId: null,
@@ -20,10 +21,11 @@ window.settingsModels = {
         try {
             const [modelsData, providersData] = await Promise.all([
                 ModelsCache.get(),
-                apiGet("/api/providers").then((d) => d.providers || []),
+                apiGet("/api/providers"),
             ]);
             this.models = modelsData;
-            this.providers = providersData;
+            this.providers = providersData.providers || [];
+            this.reasoningCatalog = providersData.reasoning_catalog || {};
             this.render();
             this._populateProviderSelect();
         } catch (error) {
@@ -393,49 +395,53 @@ window.settingsModels = {
             this._reasoningEffort = null;
         }
         this._reasoningKey = key;
-        const request = (this._reasoningRequest || 0) + 1;
-        this._reasoningRequest = request;
         const select = document.getElementById("model-reasoning-effort");
         const manual = document.getElementById("model-reasoning-effort-manual");
-        select.disabled = manual.disabled = true;
-        this._reasoningLookup = (async () => {
-            let result;
-            try {
-                result = provider ? await apiGet("/api/providers/" + encodeURIComponent(provider)
-                    + "/reasoning-capabilities?" + params) : {};
-                if (result.error) throw new Error(result.error);
-            } catch (error) {
-                result = { error: "Could not load support. Refresh support or select Default (provider)." };
+        const selected = this.providers.find((p) => p.id === provider);
+        const baseUrl = params.get("base_url") || selected?.base_url || "";
+        const format = params.get("api_format") && params.get("api_format") !== "openai"
+            ? params.get("api_format") : selected?.api_format || "openai";
+        const model = params.get("model_name");
+        let caps = { efforts: [], default_effort: null, manual: false };
+        let error = "";
+        try {
+            if (baseUrl) {
+                const url = new URL(baseUrl);
+                const entry = Object.values(this.reasoningCatalog).find((item) =>
+                    url.protocol === "https:" && url.hostname === item.host && format === item.api_format);
+                caps = entry && Object.hasOwn(entry.models, model) ? entry.models[model] : { efforts: [], default_effort: null, manual:
+                    !!model && ["http:", "https:"].includes(url.protocol)
+                    && ["openai", "anthropic", "codex"].includes(format)
+                    && url.hostname !== "generativelanguage.googleapis.com"
+                    && !(format === "openai" && baseUrl.includes("ollama.com")) };
             }
-            if (request !== this._reasoningRequest) return;
-            const caps = result.reasoning_capabilities || { efforts: [] };
-            this._reasoningOptions = caps.efforts;
-            this._reasoningManual = !!caps.manual;
-            select.replaceChildren(new Option("Default (provider)", ""));
-            caps.efforts.forEach((effort) => select.add(new Option(effort, effort)));
-            const stale = this._reasoningEffort && !caps.manual && !caps.efforts.includes(this._reasoningEffort);
-            if (stale) select.add(new Option(this._reasoningEffort + " (support not detected)", this._reasoningEffort));
-            select.value = this._reasoningEffort || "";
-            select.disabled = !!caps.manual;
-            select.style.display = caps.manual ? "none" : "block";
-            manual.disabled = !caps.manual;
-            manual.style.display = caps.manual ? "block" : "none";
-            manual.value = caps.manual ? this._reasoningEffort || "" : "";
-            const label = document.getElementById("reasoning-effort-label");
-            label.htmlFor = caps.manual ? manual.id : select.id;
-            label.textContent = caps.manual ? "Reasoning Effort (manual)"
-                : caps.efforts.length ? "Reasoning Effort (optional)" : "Reasoning Effort";
-            select.setCustomValidity(stale ? "Refresh support or select Default (provider)." : "");
-            document.getElementById("reasoning-effort-group").style.display =
-                provider || stale || result.error ? "block" : "none";
-            document.getElementById("reasoning-effort-hint").textContent = result.error || (stale
-                ? "Saved effort is no longer detected. Refresh support or select Default (provider)."
-                : caps.manual ? "Support for this model has not been identified. If its documentation supports effort, enter the provider’s value; otherwise leave empty. Empty follows the provider default."
-                : caps.efforts.length ? "This model supports reasoning effort. Choosing a level is optional. Default follows the provider; it does not disable reasoning" + (caps.default_effort ? " (" + caps.default_effort + ")" : "") + "."
-                : "Reasoning effort is not available for this model/provider. Leave Default; the model’s normal behavior is unchanged.");
-            document.getElementById("reasoning-effort-refresh").style.display = result.can_refresh ? "inline-block" : "none";
-        })();
-        return this._reasoningLookup;
+        } catch (_) {
+            error = "Enter a valid provider URL to configure reasoning effort.";
+        }
+        this._reasoningOptions = caps.efforts;
+        this._reasoningManual = !!caps.manual;
+        select.replaceChildren(new Option("Default (provider)", ""));
+        caps.efforts.forEach((effort) => select.add(new Option(effort, effort)));
+        const stale = this._reasoningEffort && !caps.manual && !caps.efforts.includes(this._reasoningEffort);
+        if (stale) select.add(new Option(this._reasoningEffort + " (not in supported options)", this._reasoningEffort));
+        select.value = this._reasoningEffort || "";
+        select.disabled = !!caps.manual;
+        select.style.display = caps.manual ? "none" : "block";
+        manual.disabled = !caps.manual;
+        manual.style.display = caps.manual ? "block" : "none";
+        manual.value = caps.manual ? this._reasoningEffort || "" : "";
+        const label = document.getElementById("reasoning-effort-label");
+        label.htmlFor = caps.manual ? manual.id : select.id;
+        label.textContent = caps.manual ? "Reasoning Effort (manual)"
+            : caps.efforts.length ? "Reasoning Effort (optional)" : "Reasoning Effort";
+        select.setCustomValidity(stale ? "Choose a listed effort or select Default (provider)." : "");
+        document.getElementById("reasoning-effort-group").style.display =
+            provider || stale || error ? "block" : "none";
+        document.getElementById("reasoning-effort-hint").textContent = error || (stale
+            ? "Saved effort is not in the supported options. Choose a listed effort or select Default (provider)."
+            : caps.manual ? "Support for this model has not been identified. If its documentation supports effort, enter the provider’s value; otherwise leave empty. Empty follows the provider default."
+            : caps.efforts.length ? "This model supports reasoning effort. Choosing a level is optional. Default follows the provider; it does not disable reasoning" + (caps.default_effort ? " (" + caps.default_effort + ")" : "") + "."
+            : "Reasoning effort is not available for this model/provider. Leave Default; the model’s normal behavior is unchanged.");
     },
 
     changeReasoningEffort() {
@@ -443,23 +449,7 @@ window.settingsModels = {
             ? "model-reasoning-effort-manual" : "model-reasoning-effort");
         this._reasoningEffort = select.value || null;
         select.setCustomValidity(this._reasoningManual || !select.value || this._reasoningOptions.includes(select.value)
-            ? "" : "Refresh support or select Default (provider).");
-    },
-
-    async refreshReasoningSupport() {
-        const provider = document.getElementById("model-provider").value;
-        const button = document.getElementById("reasoning-effort-refresh");
-        button.disabled = true;
-        try {
-            const result = await apiPost("/api/providers/" + encodeURIComponent(provider) + "/fetch-models", {});
-            if (result.error) throw new Error(result.error);
-            if (provider === document.getElementById("model-provider").value) await this.updateReasoningOptions();
-            ModelsCache.invalidate();
-        } catch (error) {
-            if (window.toast) toast.show("Failed to refresh support: " + error.message, "error");
-        } finally {
-            button.disabled = false;
-        }
+            ? "" : "Choose a listed effort or select Default (provider).");
     },
 
     showAddModelModal() {
@@ -541,7 +531,6 @@ window.settingsModels = {
 
     async save(event) {
         event.preventDefault();
-        await this._reasoningLookup;
         if (!document.getElementById("model-form").reportValidity()) return;
 
         const modelId = document.getElementById("model-id").value;

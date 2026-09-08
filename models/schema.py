@@ -784,7 +784,6 @@ class SchemaMixin:
                 "refresh_token TEXT",
                 "token_expires_at INTEGER",
                 "credential_source TEXT DEFAULT 'api_key'",
-                "model_capabilities TEXT DEFAULT '{}'",
             ]:
                 try:
                     cursor.execute(f"ALTER TABLE providers ADD COLUMN {col}")

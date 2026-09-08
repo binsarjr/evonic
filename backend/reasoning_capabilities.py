@@ -1,4 +1,4 @@
-"""Per-model reasoning metadata and effort validation."""
+"""Static per-model API reasoning capabilities and effort validation."""
 
 import re
 from urllib.parse import urlsplit
@@ -28,36 +28,48 @@ def validate_reasoning_effort(effort, capabilities):
             or (not capabilities.get('manual') and effort not in capabilities["efforts"])):
         raise ReasoningEffortError(
             "Reasoning effort is not supported by this provider/model. "
-            "Fetch models to refresh support, or select Default (provider)."
+            "Choose a listed effort or select Default (provider)."
         )
     return effort
 
 
-# Codex subscription catalog verified 2026-09-08; live metadata takes priority.
-CODEX_REASONING_DEFAULTS = {
-    'gpt-6-astra': (['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], 'medium'),
-    'gpt-5.6-sol': (['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], 'low'),
-    'gpt-5.6-terra': (['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], 'medium'),
-    'gpt-5.6-luna': (['low', 'medium', 'high', 'xhigh', 'max'], 'medium'),
-    'gpt-5.5': (['low', 'medium', 'high', 'xhigh'], 'medium'),
-    'gpt-5.4-mini': (['low', 'medium', 'high', 'xhigh'], 'medium'),
-    'gpt-5.3-codex-spark': (['low', 'medium', 'high', 'xhigh'], 'high'),
+# API-documented effort levels, reviewed 2026-09-08.
+# Codex harness-only Ultra is not an API effort. Keep subscription options conservative;
+# do not advertise API defaults as subscription defaults.
+# https://developers.openai.com/api/docs/models/gpt-6-astra
+# https://developers.openai.com/api/docs/models/gpt-5.6-sol
+# https://developers.openai.com/api/docs/models/gpt-5.5
+# https://developers.openai.com/api/docs/models/gpt-5.4-mini
+REASONING_CATALOG = {
+    'codex': {
+        'host': 'chatgpt.com', 'api_format': 'codex',
+        'models': {
+            **{model: reasoning_capabilities(['low', 'medium', 'high', 'xhigh', 'max'])
+               for model in ('gpt-6-astra', 'gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna')},
+            **{model: reasoning_capabilities(['low', 'medium', 'high', 'xhigh'])
+               for model in ('gpt-5.5', 'gpt-5.4-mini')},
+        },
+    },
+    # https://platform.claude.com/docs/en/build-with-claude/effort
+    'anthropic': {
+        'host': 'api.anthropic.com', 'api_format': 'anthropic',
+        'models': {
+            'claude-opus-4-5': reasoning_capabilities(['low', 'medium', 'high'], 'high'),
+            **{model: reasoning_capabilities(['low', 'medium', 'high', 'max'], 'high')
+               for model in ('claude-opus-4-6', 'claude-sonnet-4-6', 'claude-mythos-preview')},
+            **{model: reasoning_capabilities(['low', 'medium', 'high', 'xhigh', 'max'], 'high')
+               for model in ('claude-opus-4-7', 'claude-opus-4-8', 'claude-opus-5',
+                             'claude-sonnet-5', 'claude-fable-5', 'claude-fable-5-1',
+                             'claude-mythos-5', 'claude-mythos-5-1')},
+        },
+    },
+    # https://api-docs.deepseek.com/api/create-chat-completion/
+    'deepseek': {
+        'host': 'api.deepseek.com', 'api_format': 'openai',
+        'models': {model: reasoning_capabilities(['low', 'high', 'max'], 'high')
+                   for model in ('deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-v4-flash-vision-exp')},
+    },
 }
-
-
-def reasoning_format(config):
-    """Identify supported direct endpoints without depending on provider classes."""
-    endpoint = urlsplit(config.get('base_url') or '')
-    if endpoint.scheme != 'https':
-        return None
-    api_format = config.get('api_format', 'openai')
-    if api_format == 'codex' and endpoint.hostname == 'chatgpt.com':
-        return 'codex'
-    if api_format == 'anthropic' and endpoint.hostname == 'api.anthropic.com':
-        return 'anthropic'
-    if api_format == 'openai' and endpoint.hostname == 'api.deepseek.com':
-        return 'deepseek'
-    return None
 
 
 def reasoning_request_format(config):
@@ -75,33 +87,16 @@ def reasoning_request_format(config):
     return api_format if api_format in {'openai', 'anthropic', 'codex'} else None
 
 
-def model_reasoning_capabilities(config, metadata=None):
-    """Use advertised levels or known per-model defaults, never a universal enum."""
-    kind = reasoning_format(config)
+def model_reasoning_capabilities(config):
+    """Resolve the checked-in catalog only; provider metadata is never consulted."""
+    endpoint = urlsplit(config.get('base_url') or '')
     model = config.get('model_name')
-    metadata = metadata or {}
-    if kind == 'codex':
-        levels = metadata.get('supported_reasoning_levels')
-        if isinstance(levels, list):
-            return reasoning_capabilities(
-                [item.get('effort') for item in levels if isinstance(item, dict)],
-                metadata.get('default_reasoning_level'))
-        if model in CODEX_REASONING_DEFAULTS:
-            return reasoning_capabilities(*CODEX_REASONING_DEFAULTS[model])
-    if kind == 'anthropic':
-        capabilities = metadata.get('capabilities')
-        effort = capabilities.get('effort') if isinstance(capabilities, dict) else None
-        if isinstance(effort, dict) and effort.get('supported') is False:
-            return reasoning_capabilities()
-        if isinstance(effort, dict) and effort.get('supported'):
-            levels = [level for level in ('low', 'medium', 'high', 'xhigh', 'max')
-                      if isinstance(effort.get(level), dict) and effort[level].get('supported')]
-            return reasoning_capabilities(levels, 'high')
-    # https://api-docs.deepseek.com/api/create-chat-completion/
-    if kind == 'deepseek' and model in {
-        'deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-v4-flash-vision-exp',
-    }:
-        return reasoning_capabilities(['low', 'high', 'max'], 'high')
+    for entry in REASONING_CATALOG.values():
+        if (endpoint.scheme == 'https' and endpoint.hostname == entry['host']
+                and config.get('api_format', 'openai') == entry['api_format']):
+            known = entry['models'].get(model)
+            if known is not None:
+                return reasoning_capabilities(known['efforts'], known['default_effort'])
     return reasoning_capabilities(manual=bool(reasoning_request_format(config) and model))
 
 

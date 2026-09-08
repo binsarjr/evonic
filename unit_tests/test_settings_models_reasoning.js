@@ -2,13 +2,7 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
-
-// settings.css makes .hidden !important, overriding the inline display toggle.
-const template = fs.readFileSync("templates/partials/settings/models.html", "utf8");
-for (const id of ["reasoning-effort-group", "reasoning-effort-refresh"]) {
-    const tag = template.match(new RegExp(`<[^>]*id="${id}"[^>]*>`))[0];
-    assert.ok(!/class="[^"]*\bhidden\b/.test(tag), `${id} must allow inline display`);
-}
+const {execFileSync} = require("node:child_process");
 
 const elements = new Map();
 function element(id) {
@@ -20,86 +14,73 @@ function element(id) {
     });
     return elements.get(id);
 }
-let lookup;
+const template = fs.readFileSync("templates/partials/settings/models.html", "utf8");
+assert.ok(!template.includes('reasoning-effort-refresh'));
+assert.ok(!template.includes('model-advanced-settings'));
+for (const id of ["reasoning-effort-group", "model-reasoning-effort-manual"]) {
+    const tag = template.match(new RegExp(`<[^>]*id="${id}"[^>]*>`))[0];
+    assert.ok(!/class="[^"]*\bhidden\b/.test(tag));
+}
 const context = {
-    window: {}, document: { getElementById: element }, URLSearchParams,
+    window: {}, document: {getElementById: element}, URLSearchParams, URL,
     Option: function (text, value) { this.text = text; this.value = value; },
-    apiGet: (...args) => lookup(...args),
+    apiGet: () => { throw new Error("Effort selection must not call an API"); },
 };
 vm.runInNewContext(fs.readFileSync("static/js/settings-models.js", "utf8"), context);
 const settings = context.window.settingsModels;
-const supported = { reasoning_supported: true, can_refresh: true,
-    reasoning_capabilities: { efforts: ["low", "high", "max"], default_effort: "high" } };
-
-(async () => {
-    element("model-provider").value = "deepseek";
-    element("model-name-param").value = "deepseek-v4-pro";
-    element("model-api-format").value = "openai";
-    lookup = async () => supported;
-    settings.resetReasoningEffort("max");
-    await settings.updateReasoningOptions();
-    const select = element("model-reasoning-effort");
-    assert.equal(select.value, "max");
-    assert.equal(select.options.length, 4);
-    assert.equal(element("reasoning-effort-group").style.display, "block");
-    assert.equal(select.validationMessage, "");
-
-    // Changing the model resets the effort; unsupported providers explain the default.
-    element("model-name-param").value = "unknown";
-    await settings.updateReasoningOptions();
-    assert.equal(settings._reasoningEffort, null);
-    element("model-provider").value = "gemini";
-    lookup = async () => ({ reasoning_supported: false });
-    element("model-base-url").value = "https://api.deepseek.com/v1";
-    settings.providers = [{ id: "gemini", api_format: "openai" }];
-    settings.changeModelProvider();
-    await settings._reasoningLookup;
-    assert.equal(element("model-base-url").value, "");
-    assert.equal(element("model-api-format").value, "openai");
-    assert.equal(element("reasoning-effort-group").style.display, "block");
-
-    // Compatible endpoints use manual input even without detected support.
-    element("model-provider").value = "cavoti";
-    element("model-name-param").value = "gpt-6-astra";
-    lookup = async () => ({reasoning_supported: false, can_refresh: false,
-        reasoning_capabilities: {efforts: [], manual: true}});
-    settings.resetReasoningEffort("custom_level");
-    await settings.updateReasoningOptions();
-    const manual = element("model-reasoning-effort-manual");
-    assert.equal(manual.value, "custom_level");
+settings.reasoningCatalog = JSON.parse(execFileSync(process.env.PYTHON || "python3", ["-c",
+    "import json; from backend.reasoning_capabilities import REASONING_CATALOG; print(json.dumps(REASONING_CATALOG))"], {encoding: "utf8"}));
+settings.providers = [
+    {id: "codex", api_format: "codex", base_url: "https://chatgpt.com/backend-api/codex"},
+    {id: "cavoti", api_format: "openai", base_url: "https://cavoti.com/v1"},
+    {id: "gemini", api_format: "openai", base_url: "https://generativelanguage.googleapis.com/v1beta/openai"},
+];
+element("model-provider").value = "codex";
+element("model-name-param").value = "gpt-6-astra";
+element("model-api-format").value = "codex";
+settings.resetReasoningEffort("max");
+settings.updateReasoningOptions();
+const select = element("model-reasoning-effort"), manual = element("model-reasoning-effort-manual");
+assert.equal(select.value, "max");
+assert.equal(select.options.length, 6);
+assert.ok(!select.options.some(o => o.value === "ultra"));
+assert.equal(select.disabled, false);
+settings.resetReasoningEffort("ultra");
+settings.updateReasoningOptions();
+assert.ok(select.validationMessage);
+assert.equal(select.value, "ultra"); // Preserve stale saved values; never silently map to max.
+element("model-provider").value = "cavoti";
+settings.changeModelProvider();
+assert.equal(settings._reasoningEffort, null);
+assert.equal(select.disabled, true);
+assert.equal(manual.disabled, false);
+manual.value = "custom_level";
+settings.changeReasoningEffort();
+assert.equal(settings._reasoningEffort, "custom_level");
+settings.updateReasoningOptions();
+assert.equal(manual.value, "custom_level");
+manual.value = "";
+settings.changeReasoningEffort();
+assert.equal(settings._reasoningEffort, null);
+element("model-provider").value = "gemini";
+settings.changeModelProvider();
+assert.equal(manual.disabled, true);
+assert.ok(element("reasoning-effort-hint").textContent.includes("not available"));
+element("model-base-url").value = "not a URL";
+settings.updateReasoningOptions();
+assert.ok(element("reasoning-effort-hint").textContent.includes("valid provider URL"));
+for (const entry of Object.values(settings.reasoningCatalog)) {
+    element("model-base-url").value = "https://" + entry.host;
+    element("model-api-format").value = entry.api_format;
+    for (const [model, caps] of Object.entries(entry.models)) {
+        element("model-name-param").value = model;
+        settings.resetReasoningEffort();
+        settings.updateReasoningOptions();
+        assert.deepEqual(select.options.map(option => option.value), ["", ...caps.efforts]);
+        assert.equal(manual.disabled, true);
+    }
+    element("model-name-param").value = "__proto__";
+    settings.updateReasoningOptions();
     assert.equal(manual.disabled, false);
-    assert.equal(select.disabled, true);
-    assert.equal(element("reasoning-effort-label").htmlFor, manual.id);
-    manual.value = "high";
-    settings.changeReasoningEffort();
-    assert.equal(settings._reasoningEffort, "high");
-    lookup = async () => supported;
-    await settings.updateReasoningOptions();
-    assert.equal(select.value, "high");
-    assert.equal(manual.disabled, true);
-    assert.equal(select.disabled, false);
-
-    // A failed lookup must not silently discard a saved value.
-    settings.resetReasoningEffort("max");
-    lookup = async () => { throw new Error("offline"); };
-    await settings.updateReasoningOptions();
-    assert.equal(select.value, "max");
-    assert.ok(select.validationMessage);
-    select.value = "";
-    settings.changeReasoningEffort();
-    assert.equal(settings._reasoningEffort, null);
-    assert.equal(select.validationMessage, "");
-
-    // Late responses from another provider cannot overwrite current options.
-    let finish;
-    lookup = () => new Promise((resolve) => { finish = resolve; });
-    const pending = settings.updateReasoningOptions();
-    element("model-provider").value = "deepseek";
-    lookup = async () => supported;
-    await settings.updateReasoningOptions();
-    finish({ reasoning_supported: false });
-    await pending;
-    assert.equal(select.options.length, 4);
-    assert.equal(element("reasoning-effort-group").style.display, "block");
-    console.log("Reasoning dropdown checks passed");
-})().catch((error) => { console.error(error); process.exitCode = 1; });
+}
+console.log("Static reasoning controls passed without API calls");

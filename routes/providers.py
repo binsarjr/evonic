@@ -4,7 +4,7 @@ import requests
 from flask import Blueprint, jsonify, request
 
 from models.db import db
-from backend.reasoning_capabilities import model_reasoning_capabilities, reasoning_format
+from backend.reasoning_capabilities import REASONING_CATALOG
 from backend.reasoning_effort_error import ReasoningEffortError
 import httpx
 
@@ -17,7 +17,6 @@ def _sanitize(provider: Dict[str, Any]) -> Dict[str, Any]:
     provider["credential_configured"] = bool(provider.get("api_key")) or (
         provider.get("credential_source") == "claude_code"
     )
-    provider.pop("model_capabilities", None)
     for key in _SENSITIVE_KEYS:
         provider.pop(key, None)
     return provider
@@ -29,7 +28,7 @@ def api_list_providers():
     for p in providers:
         _sanitize(p)
         p["model_count"] = len(db.get_models_by_provider(p["id"]))
-    return jsonify({"providers": providers})
+    return jsonify({"providers": providers, "reasoning_catalog": REASONING_CATALOG})
 
 
 @providers_bp.route("/api/providers/<provider_id>", methods=["GET"])
@@ -168,7 +167,7 @@ def api_fetch_provider_models(provider_id):
                         models.append({"id": m, "name": m})
                     elif isinstance(m, dict):
                         mid = m.get("id") or m.get("slug") or m.get("model") or m.get("name", "")
-                        models.append({**m, "id": mid, "name": mid})
+                        models.append({"id": mid, "name": mid})
             else:
                 models = [
                     {"id": "gpt-6-astra", "name": "GPT-6 Astra"},
@@ -179,15 +178,9 @@ def api_fetch_provider_models(provider_id):
         else:
             raw_models = data.get("data", data.get("models", []))
             if isinstance(raw_models, list):
-                models = [{**m, "id": m.get("id", ""), "name": m.get("id", "")} for m in raw_models]
+                models = [{"id": m.get("id", ""), "name": m.get("id", "")} for m in raw_models]
             else:
                 models = []
-
-        if reasoning_format(provider) and (data.get('models') or data.get('data')):
-            db.save_provider_model_capabilities(provider, models)
-        models = [{"id": m["id"], "name": m["name"], "reasoning_capabilities":
-                   model_reasoning_capabilities({**provider, 'model_name': m['id']}, m)}
-                  for m in models]
 
         # Mark which ones are already added
         existing = {m["model_name"] for m in db.get_models_by_provider(provider_id)}
@@ -202,29 +195,6 @@ def api_fetch_provider_models(provider_id):
         return jsonify({"success": False, "error": f"Connection error: {str(e)[:200]}"}), 400
     except Exception as e:
         return jsonify({"success": False, "error": f"Error: {str(e)[:200]}"}), 500
-
-
-@providers_bp.route("/api/providers/<provider_id>/reasoning-capabilities", methods=["GET"])
-def api_model_reasoning_capabilities(provider_id):
-    """Resolve support for the Add/Edit form using the same rules as inference."""
-    provider = db.get_provider(provider_id)
-    if not provider:
-        return jsonify({"error": "Provider not found"}), 404
-    model = {"provider": provider_id, "model_name": request.args.get("model_name", ""),
-             "base_url": request.args.get("base_url", ""),
-             "api_format": request.args.get("api_format", "openai")}
-    try:
-        resolved = db.resolve_model_config(model, provider)
-        capabilities = db.get_model_reasoning_capabilities(model, provider)
-    except ValueError:
-        return jsonify({"error": "Invalid provider endpoint"}), 400
-    return jsonify({
-        "reasoning_capabilities": capabilities,
-        "reasoning_supported": bool(reasoning_format(resolved)),
-        "can_refresh": (bool(reasoning_format(resolved))
-                        and (resolved.get('base_url') or '').rstrip('/') == (provider.get("base_url") or "").rstrip("/")
-                        and resolved.get("api_format") == provider.get("api_format")),
-    })
 
 
 @providers_bp.route("/api/providers/<provider_id>/test", methods=["POST"])
