@@ -1,9 +1,11 @@
 from typing import Any, Dict
 
 import requests
+import httpx
 from flask import Blueprint, jsonify, request
 
 from models.db import db
+from backend.provider.adapters import get_provider
 
 providers_bp = Blueprint("providers", __name__)
 
@@ -102,12 +104,7 @@ def api_fetch_provider_models(provider_id):
         return jsonify({"success": False, "error": "Provider has no base_url configured"}), 400
 
     api_format = provider.get("api_format", "openai")
-    if api_format == "ollama":
-        models_url = f"{base_url}/tags"
-    elif api_format == "codex":
-        models_url = f"{base_url}/models"
-    else:
-        models_url = f"{base_url}/models"
+    adapter = get_provider(provider)
 
     headers = {"Content-Type": "application/json"}
     if api_format == "codex":
@@ -127,24 +124,8 @@ def api_fetch_provider_models(provider_id):
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
 
-    params = {}
-    if api_format == "codex":
-        params["client_version"] = "0.1.0"
-
-    if api_format == "codex":
-        from backend.provider.oauth_codex import extract_account_id
-        headers["User-Agent"] = "codex_cli_rs/0.0.0"
-        headers["originator"] = "codex_cli_rs"
-        acct = extract_account_id(headers.get("Authorization", "").replace("Bearer ", ""))
-        if acct:
-            headers["ChatGPT-Account-ID"] = acct
-
     try:
-        if api_format == "codex":
-            import httpx
-            resp = httpx.get(models_url, headers=headers, params=params, timeout=15)
-        else:
-            resp = requests.get(models_url, headers=headers, params=params, timeout=15)
+        resp = adapter.fetch_models(headers, timeout=15)
         if resp.status_code != 200:
             return jsonify({
                 "success": False,
@@ -152,32 +133,8 @@ def api_fetch_provider_models(provider_id):
                 "status_code": resp.status_code,
             })
 
-        data = resp.json()
-        if api_format == "ollama":
-            raw_models = data.get("models", [])
-            models = [{"id": m.get("name", ""), "name": m.get("name", "")} for m in raw_models]
-        elif api_format == "codex":
-            raw_models = data.get("models", data.get("data", []))
-            if isinstance(raw_models, list) and raw_models:
-                models = []
-                for m in raw_models:
-                    if isinstance(m, str):
-                        models.append({"id": m, "name": m})
-                    elif isinstance(m, dict):
-                        mid = m.get("id") or m.get("slug") or m.get("model") or m.get("name", "")
-                        models.append({"id": mid, "name": mid})
-            else:
-                models = [
-                    {"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol"},
-                    {"id": "gpt-5.6-terra", "name": "GPT-5.6 Terra"},
-                    {"id": "gpt-5.6-luna", "name": "GPT-5.6 Luna"},
-                ]
-        else:
-            raw_models = data.get("data", data.get("models", []))
-            if isinstance(raw_models, list):
-                models = [{"id": m.get("id", ""), "name": m.get("id", "")} for m in raw_models]
-            else:
-                models = []
+        discovered = adapter.parse_models(resp.json())
+        models = [{"id": m["id"], "name": m["name"]} for m in discovered]
 
         # Mark which ones are already added
         existing = {m["model_name"] for m in db.get_models_by_provider(provider_id)}
@@ -186,9 +143,9 @@ def api_fetch_provider_models(provider_id):
 
         return jsonify({"success": True, "models": models, "total": len(models)})
 
-    except requests.exceptions.Timeout:
+    except (requests.exceptions.Timeout, httpx.TimeoutException):
         return jsonify({"success": False, "error": "Connection timed out"}), 408
-    except requests.exceptions.ConnectionError as e:
+    except (requests.exceptions.ConnectionError, httpx.ConnectError) as e:
         return jsonify({"success": False, "error": f"Connection error: {str(e)[:200]}"}), 400
     except Exception as e:
         return jsonify({"success": False, "error": f"Error: {str(e)[:200]}"}), 500
@@ -206,10 +163,7 @@ def api_test_provider(provider_id):
         return jsonify({"success": False, "error": "Provider has no base_url configured"}), 400
 
     api_format = provider.get("api_format", "openai")
-    if api_format == "ollama":
-        url = f"{base_url}/tags"
-    else:
-        url = f"{base_url}/models"
+    adapter = get_provider(provider)
 
     headers = {}
     if api_format == "codex":
@@ -229,24 +183,8 @@ def api_test_provider(provider_id):
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
 
-    params = {}
-    if api_format == "codex":
-        params["client_version"] = "0.1.0"
-
-    if api_format == "codex":
-        from backend.provider.oauth_codex import extract_account_id
-        headers["User-Agent"] = "codex_cli_rs/0.0.0"
-        headers["originator"] = "codex_cli_rs"
-        acct = extract_account_id(headers.get("Authorization", "").replace("Bearer ", ""))
-        if acct:
-            headers["ChatGPT-Account-ID"] = acct
-
     try:
-        if api_format == "codex":
-            import httpx
-            resp = httpx.get(url, headers=headers, params=params, timeout=10)
-        else:
-            resp = requests.get(url, headers=headers, params=params, timeout=10)
+        resp = adapter.fetch_models(headers, timeout=10)
         if resp.status_code == 200:
             try:
                 data = resp.json()
@@ -264,9 +202,9 @@ def api_test_provider(provider_id):
                 "error": f"HTTP {resp.status_code}: {resp.text[:200]}",
                 "status_code": resp.status_code,
             })
-    except requests.exceptions.Timeout:
+    except (requests.exceptions.Timeout, httpx.TimeoutException):
         return jsonify({"success": False, "error": "Connection timed out"}), 408
-    except requests.exceptions.ConnectionError as e:
+    except (requests.exceptions.ConnectionError, httpx.ConnectError) as e:
         return jsonify({"success": False, "error": f"Connection error: {str(e)[:200]}"}), 400
     except Exception as e:
         return jsonify({"success": False, "error": f"Error: {str(e)[:200]}"}), 500

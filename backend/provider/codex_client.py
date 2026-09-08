@@ -12,6 +12,7 @@ from typing import Any, Dict, Generator, List, Optional
 
 import httpx
 
+from backend.provider.adapters import CODEX_CLIENT_VERSION, CodexProvider
 from backend.provider.oauth_codex import CODEX_BASE_URL, extract_account_id
 
 _log = logging.getLogger(__name__)
@@ -96,7 +97,7 @@ class CodexClient:
             "Authorization": f"Bearer {self.access_token}",
             "Content-Type": "application/json",
             "Accept": accept,
-            "User-Agent": "codex_cli_rs/0.0.0",
+            "User-Agent": f"codex_cli_rs/{CODEX_CLIENT_VERSION}",
             "originator": "codex_cli_rs",
         }
         if self._account_id:
@@ -119,12 +120,10 @@ class CodexClient:
         service_tier: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Send a request to the Codex Responses API."""
-        payload: Dict[str, Any] = {
-            "model": model,
-            "input": self._convert_messages(messages),
-            "stream": stream,
-            "store": False,
-        }
+        payload = CodexProvider({"base_url": self.base_url}).build_payload(
+            model, messages, max_tokens, temperature, tools, tool_choice,
+        )
+        payload["stream"] = stream
         if reasoning:
             payload["reasoning"] = {"summary": "auto"}
         if service_tier == "priority" and model_supports_fast_mode(model):
@@ -135,11 +134,6 @@ class CodexClient:
         # so the cap is limited to standard Responses API endpoints.
         if max_tokens and not self._is_chatgpt_backend():
             payload["max_output_tokens"] = max_tokens
-        if tools:
-            payload["tools"] = self._convert_tools(tools)
-            if tool_choice:
-                payload["tool_choice"] = {
-                    "type": "function", "name": tool_choice}
 
         url = f"{self.base_url}/responses"
 
@@ -431,18 +425,13 @@ class CodexClient:
         service_tier: Optional[str] = None,
     ) -> Generator[Dict[str, Any], None, None]:
         """Yield SSE delta chunks for real-time streaming to the frontend."""
-        payload: Dict[str, Any] = {
-            "model": model,
-            "input": self._convert_messages(messages),
-            "stream": True,
-            "store": False,
-        }
+        payload = CodexProvider({"base_url": self.base_url}).build_payload(
+            model, messages, max_tokens, temperature, tools,
+        )
         if reasoning:
             payload["reasoning"] = {"summary": "auto"}
         if service_tier == "priority" and model_supports_fast_mode(model):
             payload["service_tier"] = "priority"
-        if tools:
-            payload["tools"] = self._convert_tools(tools)
 
         url = f"{self.base_url}/responses"
 
@@ -483,7 +472,7 @@ class CodexClient:
             resp = httpx.get(
                 f"{self.base_url}/models",
                 headers=self._headers(accept="application/json"),
-                params={"client_version": "1.0.0"},
+                params={"client_version": CODEX_CLIENT_VERSION},
                 timeout=10,
             )
             if resp.status_code == 200:
