@@ -82,6 +82,18 @@ class OpenAiCodexProvider(OpenAIProvider):
     http_client = httpx
     reasoning_host = "chatgpt.com"
 
+    # Codex subscription catalog, verified 2026-09-08. Live metadata takes priority.
+    # API model docs differ: https://developers.openai.com/api/docs/models/gpt-6-astra
+    reasoning_defaults = {
+        "gpt-6-astra": (["low", "medium", "high", "xhigh", "max", "ultra"], "medium"),
+        "gpt-5.6-sol": (["low", "medium", "high", "xhigh", "max", "ultra"], "low"),
+        "gpt-5.6-terra": (["low", "medium", "high", "xhigh", "max", "ultra"], "medium"),
+        "gpt-5.6-luna": (["low", "medium", "high", "xhigh", "max"], "medium"),
+        "gpt-5.5": (["low", "medium", "high", "xhigh"], "medium"),
+        "gpt-5.4-mini": (["low", "medium", "high", "xhigh"], "medium"),
+        "gpt-5.3-codex-spark": (["low", "medium", "high", "xhigh"], "high"),
+    }
+
     def __init__(self, config=None, base_url="", *, access_token=None):
         # Keep the former CodexClient(token, base_url) constructor working.
         if not isinstance(config, dict):
@@ -235,7 +247,7 @@ class OpenAiCodexProvider(OpenAIProvider):
         metadata = metadata or {}
         levels = metadata.get("supported_reasoning_levels")
         if not isinstance(levels, list):
-            return reasoning_capabilities()
+            return reasoning_capabilities(*self.reasoning_defaults.get(model, ()))
         return reasoning_capabilities(
             [item.get("effort") for item in levels if isinstance(item, dict)],
             metadata.get("default_reasoning_level"),
@@ -262,6 +274,7 @@ class OpenAiCodexProvider(OpenAIProvider):
         rows = data.get("models", data.get("data", []))
         if not isinstance(rows, list) or not rows:
             return [
+                {"id": "gpt-6-astra", "name": "GPT-6 Astra"},
                 {"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol"},
                 {"id": "gpt-5.6-terra", "name": "GPT-5.6 Terra"},
                 {"id": "gpt-5.6-luna", "name": "GPT-5.6 Luna"},

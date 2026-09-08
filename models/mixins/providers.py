@@ -153,7 +153,7 @@ class ProvidersMixin:
         if (snapshot.get('base_url') == adapter.base_url
                 and snapshot.get('api_format') == resolved.get('api_format', 'openai')):
             cached = snapshot.get('models', {}).get(resolved.get('model_name'))
-            if isinstance(cached, dict):
+            if isinstance(cached, dict) and cached.get('efforts'):
                 return reasoning_capabilities(cached.get('efforts', []), cached.get('default_effort'))
         return adapter.get_reasoning_capabilities(resolved.get('model_name'))
 

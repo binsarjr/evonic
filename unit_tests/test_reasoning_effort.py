@@ -2,6 +2,7 @@
 
 from unittest.mock import MagicMock, patch
 from pathlib import Path
+import json
 import shutil
 import subprocess
 
@@ -120,6 +121,35 @@ def test_capability_endpoint_uses_effective_config(client):
                                           'base_url': 'https://openrouter.ai/api/v1'}).json
     assert result['reasoning_supported'] is False
     assert result['reasoning_capabilities']['efforts'] == []
+
+
+@pytest.mark.parametrize('model,last,default', [
+    ('gpt-6-astra', 'ultra', 'medium'),
+    ('gpt-5.6-sol', 'ultra', 'low'),
+    ('gpt-5.6-terra', 'ultra', 'medium'),
+    ('gpt-5.6-luna', 'max', 'medium'),
+])
+def test_codex_edit_has_defaults_before_discovery(client, model, last, default):
+    provider = _provider('codex', 'https://chatgpt.com/backend-api/codex')
+    url = '/api/providers/effort-test/reasoning-capabilities'
+    query = {'model_name': model, 'api_format': 'codex'}
+    result = client.get(url, query_string=query).json['reasoning_capabilities']
+    assert result['efforts'][-1] == last
+    assert result['default_effort'] == default
+    assert db.validate_model_reasoning(_model(model_name=model, reasoning_effort=last)) == last
+    # Empty snapshots saved before built-in support must not mask the defaults.
+    snapshot = {'base_url': provider['base_url'], 'api_format': 'codex',
+                'models': {model: {'efforts': [], 'default_effort': None}}}
+    with db._connect() as conn:
+        conn.execute('UPDATE providers SET model_capabilities = ? WHERE id = ?',
+                     (json.dumps(snapshot), provider['id']))
+        conn.commit()
+    assert client.get(url, query_string=query).json['reasoning_capabilities'] == result
+    db.save_provider_model_capabilities(provider, [{'id': model,
+        'supported_reasoning_levels': [{'effort': 'high'}], 'default_reasoning_level': 'high'}])
+    assert client.get(url, query_string=query).json['reasoning_capabilities']['efforts'] == ['high']
+    assert client.get(url, query_string={**query, 'base_url': 'https://gateway.example/v1'}).json[
+        'reasoning_capabilities']['efforts'] == []
 
 
 def test_failed_or_empty_discovery_keeps_verified_support(client):
