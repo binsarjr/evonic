@@ -3,6 +3,13 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
 
+// settings.css makes .hidden !important, overriding the inline display toggle.
+const template = fs.readFileSync("templates/partials/settings/models.html", "utf8");
+for (const id of ["reasoning-effort-group", "reasoning-effort-refresh"]) {
+    const tag = template.match(new RegExp(`<[^>]*id="${id}"[^>]*>`))[0];
+    assert.ok(!/class="[^"]*\bhidden\b/.test(tag), `${id} must allow inline display`);
+}
+
 const elements = new Map();
 function element(id) {
     if (!elements.has(id)) elements.set(id, {
