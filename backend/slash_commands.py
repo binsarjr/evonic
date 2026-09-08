@@ -911,7 +911,7 @@ def _register_builtins():
             resolved_model = db.resolve_model_config(model) if model else {}
         except Exception:
             resolved_model = model or {}
-        from backend.provider.codex_client import model_supports_fast_mode
+        from backend.provider.openai_codex_provider import model_supports_fast_mode
         fast_available = (
             resolved_model.get("api_format") == "codex"
             and model_supports_fast_mode(resolved_model.get("model_name"))
@@ -1222,7 +1222,7 @@ def _register_builtins():
     ) -> str:
         import json
 
-        from backend.provider.codex_client import model_supports_fast_mode
+        from backend.provider.openai_codex_provider import model_supports_fast_mode
         from models.chat import agent_chat_manager
         from models.db import db
 

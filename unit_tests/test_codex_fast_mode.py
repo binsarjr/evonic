@@ -3,7 +3,7 @@
 import json
 from unittest.mock import MagicMock, patch
 
-from backend.provider.codex_client import CodexClient, model_supports_fast_mode
+from backend.provider.openai_codex_provider import OpenAiCodexProvider, model_supports_fast_mode
 from backend.slash_commands import execute_command
 
 
@@ -56,9 +56,9 @@ def test_fast_model_gate_matches_codex_catalog_families():
 
 
 def test_codex_fast_request_adds_priority_payload_and_routing_header():
-    client = CodexClient("token", "https://chatgpt.com/backend-api/codex")
+    client = OpenAiCodexProvider({"access_token": "token", "base_url": "https://chatgpt.com/backend-api/codex"})
     model = "gpt-5.6-luna"
-    with patch("backend.provider.codex_client.httpx.post",
+    with patch("backend.provider.openai_codex_provider.httpx.post",
                return_value=_completed_response(model)) as post:
         result = client.send_request(
             model=model,
@@ -75,9 +75,9 @@ def test_codex_fast_request_adds_priority_payload_and_routing_header():
 
 
 def test_codex_fast_request_is_omitted_for_unsupported_model():
-    client = CodexClient("token", "https://chatgpt.com/backend-api/codex")
+    client = OpenAiCodexProvider({"access_token": "token", "base_url": "https://chatgpt.com/backend-api/codex"})
     model = "gpt-5.4-mini"
-    with patch("backend.provider.codex_client.httpx.post",
+    with patch("backend.provider.openai_codex_provider.httpx.post",
                return_value=_completed_response(model)) as post:
         client.send_request(
             model=model,
