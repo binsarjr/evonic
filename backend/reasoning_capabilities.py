@@ -60,6 +60,21 @@ def reasoning_format(config):
     return None
 
 
+def reasoning_request_format(config):
+    """Choose the wire format without claiming the model supports effort."""
+    base_url = config.get('base_url') or ''
+    endpoint = urlsplit(base_url)
+    if endpoint.scheme not in {'http', 'https'} or not endpoint.hostname:
+        return None
+    if endpoint.hostname == 'generativelanguage.googleapis.com':
+        return None
+    api_format = config.get('api_format', 'openai')
+    # LLMClient routes ollama.com through its native Ollama payload path.
+    if api_format == 'openai' and 'ollama.com' in base_url:
+        return None
+    return api_format if api_format in {'openai', 'anthropic', 'codex'} else None
+
+
 def model_reasoning_capabilities(config, metadata=None):
     """Use advertised levels or known per-model defaults, never a universal enum."""
     kind = reasoning_format(config)
@@ -87,19 +102,19 @@ def model_reasoning_capabilities(config, metadata=None):
         'deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-v4-flash-vision-exp',
     }:
         return reasoning_capabilities(['low', 'high', 'max'], 'high')
-    return reasoning_capabilities(manual=bool(kind and model))
+    return reasoning_capabilities(manual=bool(reasoning_request_format(config) and model))
 
 
 def apply_reasoning_effort(payload, config, effort):
     """Merge an already validated override into the existing request payload."""
     if effort is None:
         return
-    kind = reasoning_format(config)
+    kind = reasoning_request_format(config)
     if kind == 'codex':
         payload.setdefault('reasoning', {})['effort'] = effort
     elif kind == 'anthropic':
         payload.setdefault('output_config', {})['effort'] = effort
-    elif kind == 'deepseek':
+    elif kind == 'openai':
         payload['reasoning_effort'] = effort
     else:
         raise ReasoningEffortError('Reasoning effort is not supported by this provider.')

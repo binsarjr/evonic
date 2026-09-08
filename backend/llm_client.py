@@ -617,7 +617,7 @@ class LLMClient:
             retry count via llm_max_retries setting (DB default: 5).
         """
         effort = None
-        if enable_thinking and getattr(self, 'reasoning_effort', None) is not None:
+        if getattr(self, 'reasoning_effort', None) is not None:
             from models.db import db
             try:
                 effort = db.validate_model_reasoning({

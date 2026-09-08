@@ -100,7 +100,7 @@ def test_model_routes_preserve_effort_and_reject_invalid_updates(client):
                           json={'reasoning_effort': 'medium', 'is_default': 1})
     assert response.status_code == 400
     assert db.get_default_model()['id'] == mid
-    assert client.put('/api/models/' + mid, json={'base_url': 'https://gateway.example/v1'}).status_code == 400
+    assert client.put('/api/models/' + mid, json={'base_url': 'https://generativelanguage.googleapis.com/v1beta/openai'}).status_code == 400
     rows = db.get_llm_models()
     db.save_llm_models(rows)
     assert db.get_model_by_id(mid)['reasoning_effort'] == 'max'
@@ -167,7 +167,7 @@ def test_failed_or_empty_discovery_keeps_verified_support(client):
     assert db.get_provider(provider['id'])['model_capabilities'] == before
 
 
-@pytest.mark.parametrize('effort,enable,expected', [('max', True, 'max'), ('max', False, None), (None, True, None)])
+@pytest.mark.parametrize('effort,enable,expected', [('max', True, 'max'), ('max', False, 'max'), (None, True, None), (None, False, None)])
 def test_runtime_effort_is_independent_of_legacy_thinking(effort, enable, expected):
     _provider()
     client = LLMClient(_model(reasoning_effort=effort, thinking=False, timeout=10))
@@ -183,11 +183,12 @@ def test_runtime_effort_is_independent_of_legacy_thinking(effort, enable, expect
         assert 'reasoning_effort' not in payload
 
 
-def test_invalid_runtime_effort_fails_before_network():
+@pytest.mark.parametrize('enable', [True, False])
+def test_invalid_runtime_effort_fails_before_network(enable):
     _provider()
     client = LLMClient(_model(reasoning_effort='ultra'))
     with patch('backend.llm_client.requests.post') as post:
-        result = client.chat_completion([{'role': 'user', 'content': 'hi'}])
+        result = client.chat_completion([{'role': 'user', 'content': 'hi'}], enable_thinking=enable)
     assert result['error_type'] == 'configuration_error'
     post.assert_not_called()
 
@@ -204,7 +205,8 @@ def test_codex_effort_merges_summary_and_fast_mode():
     assert payload['service_tier'] == 'priority'
 
 
-def test_anthropic_runtime_effort_without_native_thinking():
+@pytest.mark.parametrize('enable', [True, False])
+def test_anthropic_runtime_effort_without_native_thinking(enable):
     provider = _provider('anthropic', 'https://api.anthropic.com/v1')
     db.save_provider_model_capabilities(provider, [{'id': 'claude', 'capabilities': {
         'effort': {'supported': True, 'high': {'supported': True}},
@@ -214,7 +216,7 @@ def test_anthropic_runtime_effort_without_native_thinking():
     response.json.return_value = {'content': [{'type': 'text', 'text': 'ok'}],
                                   'stop_reason': 'end_turn', 'usage': {}}
     with patch('backend.llm_client.requests.post', return_value=response) as post:
-        assert client.chat_completion([{'role': 'user', 'content': 'hi'}])['success']
+        assert client.chat_completion([{'role': 'user', 'content': 'hi'}], enable_thinking=enable)['success']
     payload = post.call_args.kwargs['json']
     assert payload['output_config'] == {'effort': 'high'}
     assert 'thinking' not in payload
@@ -263,7 +265,7 @@ def test_unidentified_model_accepts_manual_effort(client, api_format, url, field
         assert client.put('/api/models/' + mid, json={'reasoning_effort': invalid}).status_code == 400
     assert client.put('/api/models/' + mid, json={'reasoning_effort': ''}).status_code == 200
     assert db.get_model_by_id(mid)['reasoning_effort'] is None
-    assert not db.get_model_reasoning_capabilities({**model, 'base_url': 'https://gateway.example'})['manual']
+    assert db.get_model_reasoning_capabilities({**model, 'base_url': 'https://gateway.example'})['manual']
 
 
 def test_explicitly_unsupported_metadata_disables_manual_effort():
@@ -274,3 +276,70 @@ def test_explicitly_unsupported_metadata_disables_manual_effort():
     assert db.get_model_reasoning_capabilities(model)['manual'] is False
     with pytest.raises(ReasoningEffortError):
         db.validate_model_reasoning(model)
+
+
+@pytest.mark.parametrize('model', ['gpt-6-astra', 'deepseek-v4-pro'])
+def test_cavoti_uses_manual_effort_despite_model_name_and_cached_levels(client, model):
+    provider = _provider('openai', 'https://cavoti.com/v1')
+    snapshot = {'base_url': provider['base_url'], 'api_format': 'openai',
+                'models': {model: {'efforts': ['low'], 'default_effort': 'low', 'manual': False}}}
+    with db._connect() as conn:
+        conn.execute('UPDATE providers SET model_capabilities = ? WHERE id = ?',
+                     (json.dumps(snapshot), provider['id']))
+        conn.commit()
+    query = {'model_name': model}
+    result = client.get('/api/providers/effort-test/reasoning-capabilities', query_string=query).json
+    assert result['reasoning_capabilities'] == {'efforts': [], 'default_effort': None, 'manual': True}
+    assert not result['can_refresh']
+    created = client.post('/api/models', json=_model(model_name=model, reasoning_effort='custom_level'))
+    assert created.status_code == 200
+    mid = created.json['model_id']
+    saved = client.get('/api/models/' + mid).json
+    assert saved['reasoning_effort'] == 'custom_level'
+    clone = client.post('/api/models/' + mid + '/clone').json
+    assert db.get_model_by_id(clone['model_id'])['reasoning_effort'] == 'custom_level'
+    llm = LLMClient({**saved, 'timeout': 10})
+    response = MagicMock(status_code=200)
+    response.json.return_value = {'choices': [{'message': {'content': 'ok'}, 'finish_reason': 'stop'}], 'usage': {}}
+    with patch('backend.llm_client.requests.post', return_value=response) as post:
+        assert llm.chat_completion([{'role': 'user', 'content': 'hi'}], enable_thinking=False)['success']
+        assert post.call_args.kwargs['json']['reasoning_effort'] == 'custom_level'
+        llm.reasoning_effort = None
+        assert llm.chat_completion([{'role': 'user', 'content': 'hi'}], enable_thinking=False)['success']
+        assert 'reasoning_effort' not in post.call_args.kwargs['json']
+
+
+@pytest.mark.parametrize('api_format,url,manual', [
+    ('openai', 'http://localhost:11434/v1', True),
+    ('openai', 'https://openrouter.ai/api/v1', True),
+    ('codex', 'https://gateway.example/codex', True),
+    ('anthropic', 'https://gateway.example/anthropic', True),
+    ('openai', 'https://generativelanguage.googleapis.com/v1beta/openai', False),
+    ('ollama', 'http://localhost:11434/api', False),
+    ('openai', 'https://ollama.com/api', False),
+])
+def test_manual_support_follows_effective_request_format(api_format, url, manual):
+    config = {'api_format': api_format, 'base_url': url, 'model_name': 'gpt-6-astra'}
+    assert model_reasoning_capabilities(config)['manual'] is manual
+    assert model_reasoning_capabilities(config)['efforts'] == []
+    payload = {}
+    if manual:
+        apply_reasoning_effort(payload, config, 'high')
+        expected = {'codex': {'reasoning': {'effort': 'high'}},
+                    'anthropic': {'output_config': {'effort': 'high'}},
+                    'openai': {'reasoning_effort': 'high'}}
+        assert payload == expected[api_format]
+    else:
+        with pytest.raises(ReasoningEffortError):
+            apply_reasoning_effort(payload, config, 'high')
+
+
+def test_codex_effort_is_forwarded_when_thinking_disabled():
+    _provider('codex', 'https://chatgpt.com/backend-api/codex')
+    llm = LLMClient(_model(model_name='gpt-6-astra', reasoning_effort='high', thinking=False))
+    response = {'success': True, 'response': {'choices': [{'message': {'content': 'ok'}}], 'usage': {}}}
+    with patch('backend.provider.oauth_codex.get_valid_token', return_value='token'), \
+         patch('backend.provider.codex_client.CodexClient.send_request', return_value=response) as send:
+        assert llm.chat_completion([{'role': 'user', 'content': 'hi'}], enable_thinking=False)['success']
+    assert send.call_args.kwargs['reasoning_effort'] == 'high'
+    assert send.call_args.kwargs['reasoning'] is False

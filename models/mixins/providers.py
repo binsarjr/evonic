@@ -143,7 +143,8 @@ class ProvidersMixin:
         provider = provider or self.get_provider(model.get('provider', ''))
         resolved = self.resolve_model_config(model, provider)
         if not reasoning_format(resolved):
-            return reasoning_capabilities()
+            # Gateway names and cached metadata cannot establish automatic support.
+            return model_reasoning_capabilities(resolved)
         try:
             snapshot = json.loads((provider or {}).get('model_capabilities') or '{}')
         except (TypeError, ValueError):

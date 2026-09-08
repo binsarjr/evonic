@@ -58,10 +58,10 @@ const supported = { reasoning_supported: true, can_refresh: true,
     assert.equal(element("model-api-format").value, "openai");
     assert.equal(element("reasoning-effort-group").style.display, "block");
 
-    // Unknown models use a manual input; discovery switches back to a dropdown.
-    element("model-provider").value = "codex";
-    element("model-name-param").value = "new-model";
-    lookup = async () => ({reasoning_supported: true,
+    // Compatible endpoints use manual input even without detected support.
+    element("model-provider").value = "cavoti";
+    element("model-name-param").value = "gpt-6-astra";
+    lookup = async () => ({reasoning_supported: false, can_refresh: false,
         reasoning_capabilities: {efforts: [], manual: true}});
     settings.resetReasoningEffort("custom_level");
     await settings.updateReasoningOptions();
